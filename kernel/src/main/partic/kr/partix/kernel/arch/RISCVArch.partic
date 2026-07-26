@@ -1,0 +1,18 @@
+package kr.partix.kernel.arch;
+
+import kr.partix.kernel.io.uart.RISCVUART;
+import kr.partix.kernel.io.uart.IUART;
+
+class RISCVArch implements IArch {
+    private final IUART uart;
+
+    RISCVArch() {
+        uart = new RISCVUART(0x10000000);
+    }
+
+    void init() {}
+
+    short getArchId() -> (short) 1
+    str getArchStr() -> "RISC-V"
+    IUART getUart() -> uart
+}

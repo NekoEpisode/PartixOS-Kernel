@@ -5,15 +5,22 @@ import kr.partix.kernel.io.UART;
 
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
+import kr.partix.kernel.arch.ArchRegistry;
+import kr.partix.kernel.arch.IArch;
 
 class BspKrMain {
+    static IArch arch;
+
     static void main() {
+        ArchRegistry.init();
+
+        arch = System.getArch();
         StrBuilder strBuilder = new StrBuilder();
         strBuilder.append("Hello ");
-        strBuilder.append(System.getArchStr());
+        strBuilder.append(arch.getArchStr());
         strBuilder.append(" World!");
 
-        UART.println(strBuilder.build());
+        arch.getUart().println(strBuilder.build());
         strBuilder.dispose();
 
         while (true) {}

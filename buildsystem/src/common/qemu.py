@@ -22,6 +22,10 @@ OVMF_CODE_PATHS = {
         "/usr/share/edk2-ovmf/QEMU_EFI-aarch64.fd",
         "/usr/share/qemu-efi-aarch64/QEMU_EFI.fd",
     ],
+    "riscv64": [
+        "/usr/share/qemu-efi-riscv64/RISCV_VIRT_CODE.fd",
+        "/usr/share/edk2-ovmf/RISCV_VIRT_CODE.fd",
+    ],
 }
 
 OVMF_VARS_PATHS = {
@@ -36,6 +40,10 @@ OVMF_VARS_PATHS = {
     "aarch64": [
         "/usr/share/AAVMF/AAVMF_VARS.fd",
         "/usr/share/edk2-ovmf/QEMU_VARS-aarch64.fd",
+    ],
+    "riscv64": [
+        "/usr/share/qemu-efi-riscv64/RISCV_VIRT_VARS.fd",
+        "/usr/share/edk2-ovmf/RISCV_VIRT_VARS.fd",
     ],
 }
 
@@ -132,7 +140,8 @@ def _interactive_qemu_setup(arch: str) -> QemuRunConfig:
     )
 
 
-def create_disk_image(efi_path: Path, disk_path: Path, size_mb: int = 64, extra_files: dict = None) -> Path:
+def create_disk_image(efi_path: Path, disk_path: Path, size_mb: int = 64,
+                      extra_files: dict = None, efi_name: str = "BOOTX64.EFI") -> Path:
     efi_path = Path(efi_path).resolve()
     disk_path = Path(disk_path).resolve()
 
@@ -158,8 +167,8 @@ def create_disk_image(efi_path: Path, disk_path: Path, size_mb: int = 64, extra_
             desc="create EFI/BOOT dir",
         )
         run_cmd(
-            ["mcopy", "-i", str(disk_path), str(efi_path), "::/EFI/BOOT/BOOTX64.EFI"],
-            desc="copy bootloader.efi",
+            ["mcopy", "-i", str(disk_path), str(efi_path), f"::/EFI/BOOT/{efi_name}"],
+            desc=f"copy {efi_name}",
         )
 
         if extra_files:
@@ -184,27 +193,49 @@ def create_disk_image(efi_path: Path, disk_path: Path, size_mb: int = 64, extra_
     return disk_path
 
 
-def launch_qemu(run: QemuRunConfig, disk: Path, extra: str = "") -> None:
+def launch_qemu(run: QemuRunConfig, disk: Path, arch: str = "x86_64", extra: str = "") -> None:
     ovmf_vars_local = Path("build") / "ovmf_vars.fd"
 
     if run.ovmf_vars and Path(run.ovmf_vars).exists():
         shutil.copy2(run.ovmf_vars, ovmf_vars_local)
 
-    cmd = [
-        run.qemu_binary,
-        "-m", run.memory,
-    ]
+    is_riscv = arch == "riscv64"
 
-    if run.ovmf_code:
-        cmd += [
-            "-drive", f"if=pflash,format=raw,readonly=on,file={run.ovmf_code}",
-        ]
-    if ovmf_vars_local.exists():
-        cmd += [
-            "-drive", f"if=pflash,format=raw,file={ovmf_vars_local}",
-        ]
+    if is_riscv:
+        vars_fd = Path("build") / "partix_VARS.fd"
+        if run.ovmf_vars and Path(run.ovmf_vars).exists() and not vars_fd.exists():
+            shutil.copy2(run.ovmf_vars, vars_fd)
+        if not vars_fd.exists():
+            run_cmd(["dd", "if=/dev/zero", f"of={vars_fd}", "bs=1M", "count=32"],
+                    desc="create RISC-V VARS")
+        if vars_fd.stat().st_size < 32 * 1024 * 1024:
+            run_cmd(["truncate", "-s", "32M", str(vars_fd)],
+                    desc="resize RISC-V VARS to 32M")
 
-    cmd += ["-drive", f"file={disk},format=raw,if=ide"]
+        cmd = [
+            run.qemu_binary, "-M", "virt",
+            "-bios", "default",
+            "-m", run.memory,
+            "-drive", f"if=pflash,format=raw,unit=0,file={run.ovmf_code},readonly=on",
+            "-drive", f"if=pflash,format=raw,unit=1,file={vars_fd}",
+            "-drive", f"file={disk},format=raw,if=none,id=drive0",
+            "-device", "virtio-blk-device,drive=drive0",
+            "-device", "virtio-gpu-pci",
+        ]
+    else:
+        cmd = [
+            run.qemu_binary,
+            "-m", run.memory,
+        ]
+        if run.ovmf_code:
+            cmd += [
+                "-drive", f"if=pflash,format=raw,readonly=on,file={run.ovmf_code}",
+            ]
+        if ovmf_vars_local.exists():
+            cmd += [
+                "-drive", f"if=pflash,format=raw,file={ovmf_vars_local}",
+            ]
+        cmd += ["-drive", f"file={disk},format=raw,if=ide"]
 
     user_args = run.extra_args.split() + extra.split()
     i = 0

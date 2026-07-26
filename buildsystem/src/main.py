@@ -16,9 +16,12 @@ from .x86_64.toolchain import ClangToolchain
 from .components import bootloader as _  # noqa: F401
 from .components import hal as _        # noqa: F401
 from .components import kernel as _     # noqa: F401
-from .x86_64 import builder as _        # noqa: F401
-from .x86_64 import hal_builder as _    # noqa: F401
-from .x86_64 import kernel_builder as _  # noqa: F401
+from .x86_64 import builder as _          # noqa: F401
+from .x86_64 import hal_builder as _      # noqa: F401
+from .x86_64 import kernel_builder as _    # noqa: F401
+from .riscv64 import hal_builder as _     # noqa: F401
+from .riscv64 import kernel_builder as _   # noqa: F401
+from .riscv64 import bootloader_builder as _  # noqa: F401
 
 
 def _get_toolchain(arch: str, clang_override: str = "", linker_override: str = ""):
@@ -129,9 +132,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     extra = {}
     if outputs.get("kernel"):
         extra["KERNEL.ELF"] = outputs["kernel"]
-    create_disk_image(outputs.get("bootloader"), disk, extra_files=extra)
 
-    launch_qemu(run_cfg, disk, args.qemu_args or "")
+    efi_name = "BOOTRISCV64.EFI" if arch == "riscv64" else "BOOTX64.EFI"
+    create_disk_image(outputs.get("bootloader"), disk, extra_files=extra, efi_name=efi_name)
+
+    launch_qemu(run_cfg, disk, arch, args.qemu_args or "")
     return 0
 
 
@@ -216,8 +221,6 @@ def main() -> int:
     else:
         parser.print_help()
         return 0
-
-    return 0
 
 
 if __name__ == "__main__":

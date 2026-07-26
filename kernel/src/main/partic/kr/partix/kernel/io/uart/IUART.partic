@@ -1,0 +1,8 @@
+package kr.partix.kernel.io.uart;
+
+interface IUART {
+    void print(byte b);
+    void print(char c);
+    void print(str s);
+    void println(str s);
+}

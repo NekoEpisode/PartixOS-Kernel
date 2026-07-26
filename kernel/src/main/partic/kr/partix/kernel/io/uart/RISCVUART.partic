@@ -1,0 +1,40 @@
+package kr.partix.kernel.io.uart;
+
+import kr.partix.kernel.sys.System;
+
+/**
+ * For QEMU RISC-V
+ */
+class RISCVUART implements IUART {
+    private final long addr;
+
+    RISCVUART(long addr) {
+        this.addr = addr;
+    }
+
+    void print(char c) {
+        print((byte) c);
+    }
+
+    void print(byte b) {
+        while ((System.read8(addr + 0x05) & 0x20) == 0) {
+            // System.halt();
+        }
+        System.write8(addr, b);
+    }
+
+    void print(str s) {
+        int i = 0;
+        while (s[i] != (byte)0) {
+            print(s[i]);
+            i += 1;
+        }
+    }
+
+    void println(str s) {
+        print(s);
+        print("\n");
+    }
+
+    long getAddr() -> addr
+}

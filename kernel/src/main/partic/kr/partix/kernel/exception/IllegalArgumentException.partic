@@ -1,0 +1,10 @@
+package kr.partix.kernel.exception;
+
+import lang.partic.stdlib.core.exception.exception.RuntimeException;
+import lang.partic.stdlib.core.exception.Throwable;
+
+class IllegalArgumentException extends RuntimeException {
+    IllegalArgumentException(str message, Throwable cause) {
+        super(message, cause);
+    }
+}

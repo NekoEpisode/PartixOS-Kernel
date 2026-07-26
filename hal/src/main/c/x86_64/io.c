@@ -62,3 +62,7 @@ void write64(uint64_t addr, uint64_t data) {
 uint64_t read64(uint64_t addr) {
     return *(volatile uint64_t*)addr;
 }
+
+void halt() {
+    __asm__ volatile ("hlt");
+}

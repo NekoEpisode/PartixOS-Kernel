@@ -1,0 +1,18 @@
+package kr.partix.kernel.arch;
+
+import kr.partix.kernel.io.uart.X86UART;
+import kr.partix.kernel.io.uart.IUART;
+
+class X86Arch implements IArch {
+    private final X86UART uart;
+
+    x86Arch() {
+        uart = new X86UART();
+    }
+
+    void init() {}
+
+    short getArchId() -> (short) 0
+    str getArchStr() -> "x86_64"
+    IUART getUart() -> uart
+}

@@ -1,0 +1,10 @@
+package kr.partix.kernel.arch;
+
+import kr.partix.kernel.io.uart.IUART;
+
+interface IArch {
+    void init();
+    short getArchId();
+    str getArchStr();
+    IUART getUart();
+}

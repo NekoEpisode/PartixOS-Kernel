@@ -5,7 +5,8 @@ uint64_t gop_width, gop_height, gop_stride;
 uint64_t uefi_mmap_addr, uefi_mmap_size, uefi_mmap_desc_size;
 
 volatile unsigned long g_tick;
-volatile short archId = 0;
+
+volatile short archId = 1;
 
 typedef struct {
     void*    framebuffer;
@@ -14,16 +15,18 @@ typedef struct {
 } BootInfo;
 
 void kernel_entry(BootInfo* info) {
-    gop_framebuffer = info->framebuffer;
-    gop_width  = info->width;
-    gop_height = info->height;
-    gop_stride = info->stride;
-    uefi_mmap_addr = info->memoryMap;
-    uefi_mmap_size = info->memoryMapSize;
-    uefi_mmap_desc_size = info->memoryMapDescriptorSize;
+    if (info) {
+        gop_framebuffer = info->framebuffer;
+        gop_width  = info->width;
+        gop_height = info->height;
+        gop_stride = info->stride;
+        uefi_mmap_addr = info->memoryMap;
+        uefi_mmap_size = info->memoryMapSize;
+        uefi_mmap_desc_size = info->memoryMapDescriptorSize;
+    }
 
     extern void _start(void);
     _start();
 
-    while (1) __asm__("hlt");
+    while (1) __asm__ volatile("wfi");
 }

@@ -47,7 +47,7 @@ class HalSources:
             return []
         return sorted(
             PurePath(p.relative_to(PROJECT_ROOT))
-            for p in abs_dir.glob("*.s")
+            for p in abs_dir.glob("*.[sS]")
         )
 
     def linker_script(self, arch: str) -> PurePath:

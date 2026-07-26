@@ -1,0 +1,27 @@
+package kr.partix.kernel.arch;
+
+import kr.partix.kernel.exception.IllegalArgumentException;
+
+class ArchRegistry {
+    private static final IArch[] arches = new IArch[1024];
+
+    static void init() {
+        register(new X86Arch());
+        register(new RISCVArch());
+    }
+
+    static void register(IArch arch) {
+        short archId = arch.getArchId();
+        if (archId > 1024) {
+            throw new IllegalArgumentException("Invaild arch id (> 1024)", null);
+        }
+        arches[archId] = arch;
+    }
+
+    static IArch get(short id) {
+        if (id > 1024) {
+            throw new IllegalArgumentException("Invaild arch id (> 1024)", null);
+        }
+        return arches[id];
+    }
+}

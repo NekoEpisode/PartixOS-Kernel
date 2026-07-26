@@ -1,19 +1,19 @@
-package kr.partix.kernel.io;
+package kr.partix.kernel.io.uart;
 
 import kr.partix.kernel.sys.System;
 
-class UART {
+class X86UART implements IUART {
     private static final long UART_ADDR = 0x3F8;
 
-    static void print(char c) {
-        System.write8(UART_ADDR, (byte) c);
+    void print(char c) {
+        print((byte) c);
     }
 
-    static void print(byte b) {
+    void print(byte b) {
         System.write8(UART_ADDR, b);
     }
 
-    static void print(str s) {
+    void print(str s) {
         int i = 0;
         while (s[i] != (byte)0) {
             print(s[i]);
@@ -21,7 +21,7 @@ class UART {
         }
     }
 
-    static void println(str s) {
+    void println(str s) {
         print(s);
         print("\n");
     }
