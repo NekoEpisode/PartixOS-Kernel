@@ -30,7 +30,8 @@ Partix被设计为OOP风格的架构和原生的多平台支持以及简单的�
 Partic是一门全堆语言，这意味着所有new和绝大多数内容都是堆分配  
 你可以在Partic中使用异常系统和绝大多数Java特性，但你必须手动管理内存并且不能有内存泄漏  
 你可以调用core stdlib中的Memory类，它会自动桥接到编译时指定的Allocator(在这里是KrAlloc)上  
-只需要```Memory.free((long) obj)```你就可以释放一个堆上对象
+只需要```Memory.free((long) obj)```你就可以释放一个堆上对象  
+如果类实现了Disposable接口(比如Additional Stdlib里的```StrBuilder```)，你还可以直接调用```.dispose()```方法，按照规范，对象应清理自己的资源然后调用```Memory.free```释放自己
 
 ## 我该如何进行贡献？
 非常抱歉的是Partic编译器和工具链尚未被设计好为可以公开，所以截至目前你没有办法参与到项目的开发中  
@@ -41,5 +42,5 @@ Partic是一门全堆语言，这意味着所有new和绝大多数内容都是�
 - CYAN-HEX
 
 ## 文档信息
-最后更新: 2026/7/27 04:09  
+最后更新: 2026/7/27 04:14
 最后更新者: NekoSora
