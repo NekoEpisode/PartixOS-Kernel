@@ -1,0 +1,28 @@
+package kr.partix.kernel.io;
+
+import kr.partix.kernel.sys.System;
+
+class UART {
+    private static final long UART_ADDR = 0x3F8;
+
+    static void print(char c) {
+        System.write8(UART_ADDR, (byte) c);
+    }
+
+    static void print(byte b) {
+        System.write8(UART_ADDR, b);
+    }
+
+    static void print(str s) {
+        int i = 0;
+        while (s[i] != (byte)0) {
+            print(s[i]);
+            i += 1;
+        }
+    }
+
+    static void println(str s) {
+        print(s);
+        print("\n");
+    }
+}
