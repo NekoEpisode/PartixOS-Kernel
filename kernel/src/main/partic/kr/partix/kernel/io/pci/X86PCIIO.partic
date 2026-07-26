@@ -1,0 +1,28 @@
+package kr.partix.kernel.io.pci;
+
+import kr.partix.kernel.sys.System;
+
+class X86PCIIO implements IPCIIO {
+    private static final int CONFIG_ADDRESS = 0xCF8;
+    private static final int CONFIG_DATA = 0xCFC;
+
+    public int readConfig32(int bus, int slot, int func, int offset) {
+        int address = (int)(0x80000000
+        | ((bus & 0xFF) << 16)
+        | ((slot & 0x1F) << 11)
+        | ((func & 0x07) << 8)
+        | (offset & 0xFC));
+        System.write32(CONFIG_ADDRESS, address);
+        return System.read32(CONFIG_DATA);
+    }
+
+    public void writeConfig32(int bus, int slot, int func, int offset, int value) {
+        int address = (int)(0x80000000
+        | ((bus & 0xFF) << 16)
+        | ((slot & 0x1F) << 11)
+        | ((func & 0x07) << 8)
+        | (offset & 0xFC));
+        System.write32(CONFIG_ADDRESS, address);
+        System.write32(CONFIG_DATA, value);
+    }
+}

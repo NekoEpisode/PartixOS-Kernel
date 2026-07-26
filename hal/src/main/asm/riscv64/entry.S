@@ -25,11 +25,11 @@ kern_entry:
     wfi
     j .
 
+boot_hartid:
+    .space 8
+
 .section .bss
 .align 16
 _stack_bottom:
     .space 1048576
 _stack_top:
-
-boot_hartid:
-    .space 8

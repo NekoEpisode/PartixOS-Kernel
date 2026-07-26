@@ -1,10 +1,12 @@
 package kr.partix.kernel.arch;
 
 import kr.partix.kernel.io.uart.IUART;
+import kr.partix.kernel.io.pci.IPCIIO;
 
 interface IArch {
     void init();
     short getArchId();
     str getArchStr();
     IUART getUart();
+    IPCIIO getPciIo();
 }

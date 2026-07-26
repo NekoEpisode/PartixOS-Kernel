@@ -1,0 +1,6 @@
+package kr.partix.kernel.io.pci;
+
+interface IPCIIO {
+    int readConfig32(int bus, int slot, int func, int offset);
+    void writeConfig32(int bus, int slot, int func, int offset, int value);
+}

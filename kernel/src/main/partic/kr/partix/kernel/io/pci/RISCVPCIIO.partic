@@ -1,0 +1,23 @@
+package kr.partix.kernel.io.pci;
+
+import kr.partix.kernel.sys.System;
+
+class RISCVPCIIO implements IPCIIO {
+    private final long ecam;
+
+    RISCVPCIIO(long ecam) {
+        this.ecam = ecam;
+    }
+
+    int readConfig32(int bus, int slot, int func, int offset) {
+        long addr = ecam + ((long)bus << 20) | ((long)slot << 15) | ((long)func << 12) | (long)offset;
+        return System.read32(addr);
+    }
+
+    void writeConfig32(int bus, int slot, int func, int offset, int value) {
+        long addr = ecam + ((long)bus << 20) | ((long)slot << 15) | ((long)func << 12) | (long)offset;
+        System.write32(addr, value);
+    }
+
+    long getEcam() -> ecam
+}

@@ -1,0 +1,19 @@
+package kr.partix.kernel.io.pci;
+
+class PCIDevice {
+    int bus;
+    int slot;
+    int func;
+    int vendorId;
+    int deviceId;
+    int classCode;
+    int progIF;
+    int headerType;
+    int[] bar;
+
+    PCIDevice() {
+        bar = new int[6];
+    }
+
+    boolean isMultiFunction() -> (headerType & 0x80) != 0
+}

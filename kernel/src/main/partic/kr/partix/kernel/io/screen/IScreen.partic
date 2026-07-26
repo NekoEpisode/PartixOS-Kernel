@@ -1,0 +1,10 @@
+package kr.partix.kernel.io.screen;
+
+interface IScreen {
+    long getWidth();
+    long getHeight();
+    long getStride();
+    int* getFramebuffer();
+    void blt(int* src, long x, long y, long w, long h);
+    int setMode(long w, long h);
+}

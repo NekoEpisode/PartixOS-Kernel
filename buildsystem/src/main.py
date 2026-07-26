@@ -1,5 +1,4 @@
 import argparse
-import os
 import shutil
 import sys
 from pathlib import Path, PurePath
@@ -213,8 +212,9 @@ def main() -> int:
     elif args.command == "setup":
         return cmd_setup()
     elif args.command == "clean":
-        for d in ["build"]:
-            if os.path.isdir(d):
+        for d in ["build", Path(__file__).parent.parent / "build"]:
+            d = Path(d)
+            if d.is_dir():
                 shutil.rmtree(d)
                 print(f"  removed {d}/")
         return 0

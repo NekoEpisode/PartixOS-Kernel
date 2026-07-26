@@ -2,12 +2,16 @@ package kr.partix.kernel.arch;
 
 import kr.partix.kernel.io.uart.X86UART;
 import kr.partix.kernel.io.uart.IUART;
+import kr.partix.kernel.io.pci.X86PCIIO;
+import kr.partix.kernel.io.pci.IPCIIO;
 
 class X86Arch implements IArch {
     private final X86UART uart;
+    private final X86PCIIO pciio;
 
     x86Arch() {
         uart = new X86UART();
+        pciio = new X86PCIIO();
     }
 
     void init() {}
@@ -15,4 +19,5 @@ class X86Arch implements IArch {
     short getArchId() -> (short) 0
     str getArchStr() -> "x86_64"
     IUART getUart() -> uart
+    IPCIIO getPciIo() -> pciio;
 }

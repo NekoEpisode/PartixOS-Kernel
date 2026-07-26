@@ -1,0 +1,141 @@
+package kr.partix.kernel.io.pci;
+
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import kr.partix.kernel.main.BspKrMain;
+
+class PCI {
+    private static final int MAX_DEVICES = 256;
+    private static int deviceCount = 0;
+    private static PCIDevice[] devices = new PCIDevice[MAX_DEVICES];
+    private static IPCIIO pciIo;
+
+    static IPCIIO getPciIo() {
+        if (pciIo == null) {
+            pciIo = BspKrMain.arch.getPciIo();
+        }
+        return pciIo;
+    }
+
+    static int readConfig32(int bus, int slot, int func, int offset) -> getPciIo().readConfig32(bus, slot, func, offset)
+
+    static int getVendorId(int bus, int slot, int func) -> readConfig32(bus, slot, func, 0x00) & 0xFFFF
+
+    static boolean isDevicePresent(int bus, int slot, int func) -> getVendorId(bus, slot, func) != 0xFFFF
+
+    static PCIDevice readDevice(int bus, int slot, int func) {
+        if (!isDevicePresent(bus, slot, func)) return null;
+        PCIDevice dev = new PCIDevice();
+        dev.bus = bus;
+        dev.slot = slot;
+        dev.func = func;
+
+        int vendorDevice = pciIo.readConfig32(bus, slot, func, 0x00);
+        dev.vendorId = vendorDevice & 0xFFFF;
+        dev.deviceId = (vendorDevice >> 16) & 0xFFFF;
+
+        int classProg = pciIo.readConfig32(bus, slot, func, 0x08);
+        dev.classCode = (classProg >> 16) & 0xFFFF;
+        dev.progIF = (classProg >> 8) & 0xFF;
+
+        int header = pciIo.readConfig32(bus, slot, func, 0x0C);
+        dev.headerType = (header >> 16) & 0xFF;
+
+        for (int i = 0; i < 6; i += 1) {
+            dev.bar[i] = pciIo.readConfig32(bus, slot, func, 0x10 + i * 4);
+        }
+        return dev;
+    }
+
+    static PCIDevice[] enumerate() {
+        deviceCount = 0;
+        for (int bus = 0; bus < 256; bus += 1) {
+            for (int slot = 0; slot < 32; slot += 1) {
+                for (int func = 0; func < 8; func += 1) {
+                    if (!isDevicePresent(bus, slot, func)) {
+                        if (func == 0) break;
+                        continue;
+                    }
+                    PCIDevice dev = readDevice(bus, slot, func);
+                    if (dev != null && deviceCount < MAX_DEVICES) {
+                        devices[deviceCount] = dev;
+                        deviceCount += 1;
+                    }
+                    if (!dev.isMultiFunction()) break;
+                }
+            }
+        }
+        return devices;
+    }
+
+    static int getDeviceCount() -> deviceCount
+
+    static PCIDevice getDevice(int index) {
+        if (index < 0 || index >= deviceCount) return null;
+        return devices[index];
+    }
+
+    static PCIDevice[] findByClass(int classCode) {
+        int count = 0;
+        for (int i = 0; i < deviceCount; i += 1) {
+            if (devices[i].classCode == classCode) count += 1;
+        }
+        PCIDevice[] result = new PCIDevice[count];
+        int index = 0;
+        for (int i = 0; i < deviceCount; i += 1) {
+            if (devices[i].classCode == classCode) {
+                result[index] = devices[i];
+                index += 1;
+            }
+        }
+        return result;
+    }
+
+    static PCIDevice[] findById(int vendorId, int deviceId) {
+        int count = 0;
+        for (int i = 0; i < deviceCount; i += 1) {
+            if (devices[i].vendorId == vendorId && devices[i].deviceId == deviceId) count += 1;
+        }
+        PCIDevice[] result = new PCIDevice[count];
+        int index = 0;
+        for (int i = 0; i < deviceCount; i += 1) {
+            if (devices[i].vendorId == vendorId && devices[i].deviceId == deviceId) {
+                result[index] = devices[i];
+                index += 1;
+            }
+        }
+        return result;
+    }
+
+    static PCIDevice[] findStorageDevices() {
+        int count = 0;
+        for (int i = 0; i < deviceCount; i += 1) {
+            if ((devices[i].classCode >> 8) == 0x01) count += 1;
+        }
+        PCIDevice[] result = new PCIDevice[count];
+        int index = 0;
+        for (int i = 0; i < deviceCount; i += 1) {
+            if ((devices[i].classCode >> 8) == 0x01) {
+                result[index] = devices[i];
+                index += 1;
+            }
+        }
+        return result;
+    }
+
+    static PCIDevice[] findAHCI() {
+        int count = 0;
+        for (int i = 0; i < deviceCount; i += 1) {
+            if (devices[i].classCode == 0x0106 && devices[i].progIF == 0x01) count += 1;
+        }
+        PCIDevice[] result = new PCIDevice[count];
+        int index = 0;
+        for (int i = 0; i < deviceCount; i += 1) {
+            if (devices[i].classCode == 0x0106 && devices[i].progIF == 0x01) {
+                result[index] = devices[i];
+                index += 1;
+            }
+        }
+        return result;
+    }
+}

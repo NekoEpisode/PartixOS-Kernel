@@ -7,6 +7,8 @@ import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
 import kr.partix.kernel.arch.ArchRegistry;
 import kr.partix.kernel.arch.IArch;
+import kr.partix.kernel.io.pci.PCIDevice;
+import kr.partix.kernel.io.pci.PCI;
 
 class BspKrMain {
     static IArch arch;
@@ -22,6 +24,36 @@ class BspKrMain {
 
         arch.getUart().println(strBuilder.build());
         strBuilder.dispose();
+
+        PCIDevice[] allDevices = PCI.enumerate();
+        int count = PCI.getDeviceCount();
+        strBuilder = new StrBuilder();
+        strBuilder.append("Scanned result:\n");
+        strBuilder.append(StrUtils.toDec(count));
+        strBuilder.append(" devices.\n");
+        for (long l = 0; l < allDevices.length; l++) {
+            PCIDevice device = allDevices[l];
+            if (device == null) break;
+
+            strBuilder = new StrBuilder();
+            strBuilder.append(StrUtils.toHex(device.bus));
+            strBuilder.append(":");
+            strBuilder.append(StrUtils.toHex(device.slot));
+            strBuilder.append(".");
+            strBuilder.append(StrUtils.toHex(device.func));
+            strBuilder.append("  VID=");
+            strBuilder.append(StrUtils.toHex(device.vendorId));
+            strBuilder.append(" DID=");
+            strBuilder.append(StrUtils.toHex(device.deviceId));
+            strBuilder.append("  class=");
+            strBuilder.append(StrUtils.toHex(device.classCode));
+            strBuilder.append(" prog=");
+            strBuilder.append(StrUtils.toHex(device.progIF));
+            strBuilder.append("\n");
+
+            arch.getUart().print(strBuilder.build());
+            strBuilder.dispose();
+        }
 
         while (true) {}
     }

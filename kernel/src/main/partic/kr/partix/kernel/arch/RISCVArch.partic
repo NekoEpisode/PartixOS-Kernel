@@ -2,12 +2,16 @@ package kr.partix.kernel.arch;
 
 import kr.partix.kernel.io.uart.RISCVUART;
 import kr.partix.kernel.io.uart.IUART;
+import kr.partix.kernel.io.pci.IPCIIO;
+import kr.partix.kernel.io.pci.RISCVPCIIO;
 
 class RISCVArch implements IArch {
     private final IUART uart;
+    private final IPCIIO pciIo;
 
     RISCVArch() {
-        uart = new RISCVUART(0x10000000);
+        uart = new RISCVUART(0x10000000); // QEMU
+        pciIo = new RISCVPCIIO(0x30000000); // QEMU
     }
 
     void init() {}
@@ -15,4 +19,5 @@ class RISCVArch implements IArch {
     short getArchId() -> (short) 1
     str getArchStr() -> "RISC-V"
     IUART getUart() -> uart
+    IPCIIO getPciIo() -> pciIo
 }
