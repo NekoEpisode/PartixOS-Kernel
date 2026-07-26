@@ -1,0 +1,22 @@
+package kr.partix.kernel.sys;
+
+class System {
+    private static str[] arches = {
+        "x86_64",
+        "RISC-V",
+        "Arm"
+    };
+
+    extern long archId; // 0 for x86_64
+
+    extern void write8(long addr, byte data);
+    extern byte read8(long addr);
+    extern void write16(long addr, short data);
+    extern short read16(long addr);
+    extern void write32(long addr, int data);
+    extern int read32(long addr);
+    extern void write64(long addr, long data);
+    extern long read64(long addr);
+
+    static str getArchStr() -> arches[archId]
+}

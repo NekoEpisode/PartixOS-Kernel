@@ -1,0 +1,21 @@
+package kr.partix.kernel.main;
+
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.io.UART;
+
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+
+class BspKrMain {
+    static void main() {
+        StrBuilder strBuilder = new StrBuilder();
+        strBuilder.append("Hello ");
+        strBuilder.append(System.getArchStr());
+        strBuilder.append(" World!");
+
+        UART.println(strBuilder.build());
+        strBuilder.dispose();
+
+        while (true) {}
+    }
+}

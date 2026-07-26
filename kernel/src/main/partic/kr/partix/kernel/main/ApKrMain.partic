@@ -1,0 +1,7 @@
+package kr.partix.kernel.main;
+
+class ApKrMain {
+    static void main() {
+        // placeholder
+    }
+}

@@ -1,0 +1,13 @@
+package kr.partix.kernel.lib;
+
+class KrAlloc {
+    extern long kr_malloc(long size);
+    extern void kr_free(long addr);
+
+    static long allocate(long size) {
+        return kr_malloc(size);
+    }
+    static void free(long addr) {
+        kr_free(addr);
+    }
+}
