@@ -73,7 +73,7 @@ class BspKrMain {
 
             while (true) {}
         } catch (Exception e) {
-            arch.getUart().print("!!! EXCEPTION !!!");
+            arch.getUart().println("!!! EXCEPTION !!!");
 
             while (true) {}
         }

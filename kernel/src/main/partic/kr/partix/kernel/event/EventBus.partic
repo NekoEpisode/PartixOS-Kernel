@@ -9,7 +9,7 @@ import kr.partix.kernel.exception.NotInitializedException;
 import kr.partix.kernel.boxes.IntegerBox;
 
 class EventBus {
-    private static boolean inited = false;
+    private volatile static boolean inited = false;
     private static Map eventListeners; // <IntegerBox(EventId), List<<? extends IEventListener>>> // TODO: 如果未来加入了多核，则需自行实现ConcurrentHashMap
     private EventBus() {}
 
