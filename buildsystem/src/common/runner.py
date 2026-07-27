@@ -19,7 +19,6 @@ def run_cmd(
     label = desc or " ".join(args)
     cmd = " ".join(str(a) for a in args)
     print(f"  [RUN] {label}")
-    print(f"  [CMD] {cmd}")
     result = subprocess.run(cmd, cwd=cwd, shell=True, capture_output=True, text=True)
     if result.returncode != 0:
         stderr = result.stderr.strip()

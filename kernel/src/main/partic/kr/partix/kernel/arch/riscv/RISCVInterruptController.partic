@@ -1,0 +1,76 @@
+package kr.partix.kernel.arch.riscv;
+
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.interrupt.IInterruptController;
+import kr.partix.kernel.interrupt.IInterruptHandler;
+import kr.partix.kernel.interrupt.IInterruptData;
+import kr.partix.kernel.interrupt.Interrupt;
+
+class RISCVInterruptController implements IInterruptController {
+    private static final long PLIC_BASE = 0x0C000000L;
+
+    private final IInterruptHandler[] handlers = new IInterruptHandler[256];
+
+    private boolean plicReady = false;
+
+    void init() {
+        // TODO: need bootloader to map PLIC (0x0C000000) in page tables
+    }
+
+    private void ensurePlic() {
+        if (plicReady) return;
+        for (long i = 1; i < 64; i++) {
+            writeEnable(i, false);
+        }
+        writeThreshold(0);
+        plicReady = true;
+    }
+
+    void registerHandler(int vector, IInterruptHandler handler) {
+        handlers[vector] = handler;
+    }
+
+    void unregisterHandler(int vector) {
+        handlers[vector] = null;
+    }
+
+    void enable(int vector) {
+        ensurePlic();
+        writeEnable(vector, true);
+        writePriority(vector, 1);
+    }
+
+    void disable(int vector) {
+        writeEnable(vector, false);
+    }
+
+    void eoi(int vector) {
+        System.write32(PLIC_BASE + 0x200004L, vector);
+    }
+
+    void dispatch(int cause, long epc, long sp, long frame) {
+        int vector = (int) cause;
+
+        IInterruptHandler h = handlers[vector];
+        IInterruptData data = null;
+        if (h != null) h.handle(vector, data);
+        Interrupt.fire(vector, epc, sp, data);
+        eoi(vector);
+    }
+
+    private static void writeEnable(long src, boolean on) {
+        long offset = 0x2000 + (src / 32) * 4;
+        int bit = (int)(src % 32);
+        int val = System.read32(PLIC_BASE + offset);
+        if (on) val |= (1 << bit);
+        else    val &= ~(1 << bit);
+        System.write32(PLIC_BASE + offset, val);
+    }
+
+    private static void writePriority(long src, int prio) {
+        System.write32(PLIC_BASE + src * 4, prio);
+    }
+    private static void writeThreshold(int thresh) {
+        System.write32(PLIC_BASE + 0x200000L, thresh);
+    }
+}

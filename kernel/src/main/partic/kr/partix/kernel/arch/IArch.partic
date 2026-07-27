@@ -2,6 +2,7 @@ package kr.partix.kernel.arch;
 
 import kr.partix.kernel.io.uart.IUART;
 import kr.partix.kernel.io.pci.IPCIIO;
+import kr.partix.kernel.interrupt.IInterruptController;
 
 interface IArch {
     void init();
@@ -9,4 +10,5 @@ interface IArch {
     str getArchStr();
     IUART getUart();
     IPCIIO getPciIo();
+    IInterruptController getInterruptController();
 }

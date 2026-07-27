@@ -1,0 +1,88 @@
+package kr.partix.kernel.arch.x86;
+
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.interrupt.IInterruptController;
+import kr.partix.kernel.interrupt.IInterruptHandler;
+import kr.partix.kernel.interrupt.IInterruptData;
+import kr.partix.kernel.interrupt.Interrupt;
+
+class X86InterruptController implements IInterruptController {
+    private static final int PIC1_CMD  = 0x20;
+    private static final int PIC1_DATA = 0x21;
+    private static final int PIC2_CMD  = 0xA0;
+    private static final int PIC2_DATA = 0xA1;
+    private static final int IRQ_BASE  = 0x20;
+
+    private final IInterruptHandler[] handlers = new IInterruptHandler[256];
+    private int pic1Mask;
+    private int pic2Mask;
+
+    void init() {
+        // Remap: master → 0x20, slave → 0x28
+        System.write8(PIC1_CMD, (byte) 0x11);
+        System.write8(PIC1_DATA, (byte) IRQ_BASE);
+        System.write8(PIC1_DATA, (byte) 0x04);
+        System.write8(PIC1_DATA, (byte) 0x01);
+
+        System.write8(PIC2_CMD, (byte) 0x11);
+        System.write8(PIC2_DATA, (byte) (IRQ_BASE + 8));
+        System.write8(PIC2_DATA, (byte) 0x02);
+        System.write8(PIC2_DATA, (byte) 0x01);
+
+        // Mask everything initially
+        pic1Mask = 0xFF & ~(1 << 2);  // unmask slave PIC cascade
+        pic2Mask = 0xFF;
+        System.write8(PIC1_DATA, (byte) pic1Mask);
+        System.write8(PIC2_DATA, (byte) pic2Mask);
+    }
+
+    void registerHandler(int vector, IInterruptHandler handler) {
+        handlers[vector] = handler;
+    }
+
+    void unregisterHandler(int vector) {
+        handlers[vector] = null;
+    }
+
+    void enable(int vector) {
+        if (vector < IRQ_BASE || vector >= IRQ_BASE + 16) return;
+        int irq = vector - IRQ_BASE;
+        if (irq < 8) {
+            pic1Mask &= ~(1 << irq);
+            System.write8(PIC1_DATA, (byte) pic1Mask);
+        } else {
+            pic2Mask &= ~(1 << (irq - 8));
+            System.write8(PIC2_DATA, (byte) pic2Mask);
+        }
+    }
+
+    void disable(int vector) {
+        if (vector < IRQ_BASE || vector >= IRQ_BASE + 16) return;
+        int irq = vector - IRQ_BASE;
+        if (irq < 8) {
+            pic1Mask |= (1 << irq);
+            System.write8(PIC1_DATA, (byte) pic1Mask);
+        } else {
+            pic2Mask |= (1 << (irq - 8));
+            System.write8(PIC2_DATA, (byte) pic2Mask);
+        }
+    }
+
+    void eoi(int vector) {
+        int irq = vector - IRQ_BASE;
+        if (irq >= 0 && irq < 16) {
+            System.write8(PIC1_CMD, (byte) 0x20);
+            if (irq >= 8) {
+                System.write8(PIC2_CMD, (byte) 0x20);
+            }
+        }
+    }
+
+    void dispatch(int vector, long epc, long sp, long frame) {
+        IInterruptHandler h = handlers[vector];
+        IInterruptData data = null;
+        if (h != null) h.handle(vector, data);
+        Interrupt.fire(vector, epc, sp, data);
+        eoi(vector);
+    }
+}

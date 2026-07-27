@@ -1,0 +1,5 @@
+package kr.partix.kernel.interrupt;
+
+interface IInterruptHandler {
+    void handle(int vector, IInterruptData data);
+}

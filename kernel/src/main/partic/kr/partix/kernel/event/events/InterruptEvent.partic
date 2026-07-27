@@ -1,0 +1,25 @@
+package kr.partix.kernel.event.events;
+
+import kr.partix.kernel.event.AEvent;
+import kr.partix.kernel.event.EventId;
+import kr.partix.kernel.interrupt.IInterruptData;
+
+class InterruptEvent extends AEvent {
+    private final int vector;
+    private final long epc;
+    private final long sp;
+    private final IInterruptData data;
+
+    InterruptEvent(int vector, long epc, long sp, IInterruptData data) {
+        this.vector = vector;
+        this.epc = epc;
+        this.sp = sp;
+        this.data = data;
+    }
+
+    int getEventId() -> EventId.INTERRUPT_EVENT
+    int getVector() -> vector
+    long getEpc() -> epc
+    long getSp() -> sp
+    IInterruptData getData() -> data
+}

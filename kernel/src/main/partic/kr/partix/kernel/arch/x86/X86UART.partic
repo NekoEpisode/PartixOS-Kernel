@@ -1,6 +1,7 @@
-package kr.partix.kernel.io.uart;
+package kr.partix.kernel.arch.x86;
 
 import kr.partix.kernel.sys.System;
+import kr.partix.kernel.io.uart.IUART;
 
 class X86UART implements IUART {
     private static final long UART_ADDR = 0x3F8;

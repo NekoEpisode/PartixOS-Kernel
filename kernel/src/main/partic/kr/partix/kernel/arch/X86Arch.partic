@@ -1,23 +1,30 @@
 package kr.partix.kernel.arch;
 
-import kr.partix.kernel.io.uart.X86UART;
+import kr.partix.kernel.arch.x86.X86UART;
 import kr.partix.kernel.io.uart.IUART;
-import kr.partix.kernel.io.pci.X86PCIIO;
+import kr.partix.kernel.arch.x86.X86PCIIO;
 import kr.partix.kernel.io.pci.IPCIIO;
+import kr.partix.kernel.interrupt.IInterruptController;
+import kr.partix.kernel.arch.x86.X86InterruptController;
 
 class X86Arch implements IArch {
     private final X86UART uart;
     private final X86PCIIO pciio;
+    private final X86InterruptController ic;
 
-    x86Arch() {
+    X86Arch() {
         uart = new X86UART();
         pciio = new X86PCIIO();
+        ic = new X86InterruptController();
     }
 
-    void init() {}
+    void init() {
+        ic.init();
+    }
 
     short getArchId() -> (short) 0
     str getArchStr() -> "x86_64"
     IUART getUart() -> uart
-    IPCIIO getPciIo() -> pciio;
+    IPCIIO getPciIo() -> pciio
+    IInterruptController getInterruptController() -> ic
 }

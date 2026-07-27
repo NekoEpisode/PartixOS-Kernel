@@ -1,0 +1,11 @@
+package kr.partix.kernel.interrupt;
+
+import kr.partix.kernel.event.EventBus;
+import kr.partix.kernel.event.EventId;
+import kr.partix.kernel.event.events.InterruptEvent;
+
+class Interrupt {
+    static void fire(int vector, long epc, long sp, IInterruptData data) {
+        EventBus.call(new InterruptEvent(vector, epc, sp, data));
+    }
+}

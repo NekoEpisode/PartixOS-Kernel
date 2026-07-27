@@ -1,0 +1,4 @@
+package kr.partix.kernel.interrupt;
+
+interface IInterruptData {
+}

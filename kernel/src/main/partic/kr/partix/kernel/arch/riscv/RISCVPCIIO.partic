@@ -1,6 +1,7 @@
-package kr.partix.kernel.io.pci;
+package kr.partix.kernel.arch.riscv;
 
 import kr.partix.kernel.sys.System;
+import kr.partix.kernel.io.pci.IPCIIO;
 
 class RISCVPCIIO implements IPCIIO {
     private final long ecam;

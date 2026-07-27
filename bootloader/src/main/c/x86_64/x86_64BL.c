@@ -17,6 +17,7 @@ typedef struct {
     UINT64   memoryMap;
     UINT64   memoryMapSize;
     UINT64   memoryMapDescriptorSize;
+    UINT16   cs_selector;
 } BootInfo;
 
 #define ET_EXEC  2
@@ -122,7 +123,7 @@ static EFI_STATUS load_file(CHAR16* path, VOID** out, UINT64* outSize) {
 }
 
 static UINT64 load_elf(VOID* elfData, UINT64 elfSize) {
-    Elf64_Ehdr* ehdr = (Elf64_Ehdr*)elfData;
+    Elf64_Ehdr* ehdr = elfData;
     Elf64_Phdr* phdrs = (Elf64_Phdr*)((UINT8*)elfData + ehdr->e_phoff);
 
     UINT64 minAddr = ~0ULL, maxAddr = 0;
@@ -155,6 +156,8 @@ static UINT64 load_elf(VOID* elfData, UINT64 elfSize) {
     return ehdr->e_entry;
 }
 
+static UINT16 get_cs_selector(void);
+
 static void __attribute__((noreturn)) exit_boot_services(UINT64 kernelEntry) {
     UINTN mmapSize = 0, mmapKey = 0, descSize = 0;
     UINT32 descVer = 0;
@@ -174,10 +177,16 @@ static void __attribute__((noreturn)) exit_boot_services(UINT64 kernelEntry) {
     bootInfo.memoryMap              = (UINT64)mmap;
     bootInfo.memoryMapSize          = mmapSize;
     bootInfo.memoryMapDescriptorSize = descSize;
-
+    bootInfo.cs_selector = get_cs_selector();
     KernEntry kern = (KernEntry)kernelEntry;
     kern(&bootInfo);
     while (1) __asm__("hlt");
+}
+
+UINT16 get_cs_selector(void) {
+    UINT16 cs;
+    asm volatile("mov %%cs, %0" : "=r"(cs));
+    return cs;
 }
 
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE handle, EFI_SYSTEM_TABLE* systemTable) {

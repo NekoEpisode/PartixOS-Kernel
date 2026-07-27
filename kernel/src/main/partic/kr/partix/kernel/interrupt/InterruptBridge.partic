@@ -1,0 +1,10 @@
+package kr.partix.kernel.interrupt;
+
+import kr.partix.kernel.main.BspKrMain;
+
+class InterruptBridge {
+    static void dispatch(int cause, long epc, long sp, long frame) {
+        IInterruptController c = BspKrMain.arch.getInterruptController();
+        c.dispatch(cause, epc, sp, frame);
+    }
+}

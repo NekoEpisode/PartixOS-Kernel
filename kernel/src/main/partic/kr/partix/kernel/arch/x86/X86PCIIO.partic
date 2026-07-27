@@ -1,6 +1,7 @@
-package kr.partix.kernel.io.pci;
+package kr.partix.kernel.arch.x86;
 
 import kr.partix.kernel.sys.System;
+import kr.partix.kernel.io.pci.IPCIIO;
 
 class X86PCIIO implements IPCIIO {
     private static final int CONFIG_ADDRESS = 0xCF8;

@@ -24,6 +24,8 @@ class BspKrMain {
             ArchRegistry.init();
 
             arch = System.getArch();
+            arch.init();
+
             StrBuilder strBuilder = new StrBuilder();
             strBuilder.append("Hello ");
             strBuilder.append(arch.getArchStr());
