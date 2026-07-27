@@ -3,7 +3,7 @@ package kr.partix.kernel.arch;
 import kr.partix.kernel.exception.IllegalArgumentException;
 
 class ArchRegistry {
-    private static final IArch[] arches = new IArch[1024];
+    private static final IArch[] arches = new IArch[1024]; // 最多允许1024个架构
 
     static void init() {
         register(new X86Arch());
