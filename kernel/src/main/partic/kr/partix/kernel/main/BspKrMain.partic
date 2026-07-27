@@ -5,56 +5,77 @@ import kr.partix.kernel.io.UART;
 
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.exception.exception.Exception;
+import lang.partic.stdlib.core.memory.Memory;
 import kr.partix.kernel.arch.ArchRegistry;
 import kr.partix.kernel.arch.IArch;
 import kr.partix.kernel.io.pci.PCIDevice;
 import kr.partix.kernel.io.pci.PCI;
+import kr.partix.kernel.event.EventBus;
+import kr.partix.kernel.event.EventId;
+import kr.partix.kernel.event.eventlisteners.TestEventListener;
+import kr.partix.kernel.event.events.TestEvent;
 
 class BspKrMain {
     static IArch arch;
 
     static void main() {
-        ArchRegistry.init();
+        try {
+            ArchRegistry.init();
 
-        arch = System.getArch();
-        StrBuilder strBuilder = new StrBuilder();
-        strBuilder.append("Hello ");
-        strBuilder.append(arch.getArchStr());
-        strBuilder.append(" World!");
+            arch = System.getArch();
+            StrBuilder strBuilder = new StrBuilder();
+            strBuilder.append("Hello ");
+            strBuilder.append(arch.getArchStr());
+            strBuilder.append(" World!");
 
-        arch.getUart().println(strBuilder.build());
-        strBuilder.dispose();
-
-        PCIDevice[] allDevices = PCI.enumerate();
-        int count = PCI.getDeviceCount();
-        strBuilder = new StrBuilder();
-        strBuilder.append("Scanned result:\n");
-        strBuilder.append(StrUtils.toDec(count));
-        strBuilder.append(" devices.\n");
-        for (long l = 0; l < allDevices.length; l++) {
-            PCIDevice device = allDevices[l];
-            if (device == null) break;
-
-            strBuilder = new StrBuilder();
-            strBuilder.append(StrUtils.toHex(device.bus));
-            strBuilder.append(":");
-            strBuilder.append(StrUtils.toHex(device.slot));
-            strBuilder.append(".");
-            strBuilder.append(StrUtils.toHex(device.func));
-            strBuilder.append("  VID=");
-            strBuilder.append(StrUtils.toHex(device.vendorId));
-            strBuilder.append(" DID=");
-            strBuilder.append(StrUtils.toHex(device.deviceId));
-            strBuilder.append("  class=");
-            strBuilder.append(StrUtils.toHex(device.classCode));
-            strBuilder.append(" prog=");
-            strBuilder.append(StrUtils.toHex(device.progIF));
-            strBuilder.append("\n");
-
-            arch.getUart().print(strBuilder.build());
+            str builded1 = strBuilder.build();
+            arch.getUart().println(builded1);
             strBuilder.dispose();
-        }
+            Memory.free(builded1);
 
-        while (true) {}
+            PCIDevice[] allDevices = PCI.enumerate();
+            int count = PCI.getDeviceCount();
+            strBuilder = new StrBuilder();
+            strBuilder.append("Scanned result:\n");
+            strBuilder.append(StrUtils.toDec(count));
+            strBuilder.append(" devices.\n");
+            for (long l = 0; l < allDevices.length; l++) {
+                PCIDevice device = allDevices[l];
+                if (device == null) break;
+
+                strBuilder = new StrBuilder();
+                strBuilder.append(StrUtils.toHex(device.bus));
+                strBuilder.append(":");
+                strBuilder.append(StrUtils.toHex(device.slot));
+                strBuilder.append(".");
+                strBuilder.append(StrUtils.toHex(device.func));
+                strBuilder.append("  VID=");
+                strBuilder.append(StrUtils.toHex(device.vendorId));
+                strBuilder.append(" DID=");
+                strBuilder.append(StrUtils.toHex(device.deviceId));
+                strBuilder.append("  class=");
+                strBuilder.append(StrUtils.toHex(device.classCode));
+                strBuilder.append(" prog=");
+                strBuilder.append(StrUtils.toHex(device.progIF));
+                strBuilder.append("\n");
+
+                str builded = strBuilder.build();
+                arch.getUart().print(builded);
+                strBuilder.dispose();
+                Memory.free(builded);
+            }
+
+            EventBus.init();
+            EventBus.registerEventListener(EventId.TEST_EVENT, new TestEventListener());
+            EventBus.call(new TestEvent(42));
+            EventBus.dispose();
+
+            while (true) {}
+        } catch (Exception e) {
+            arch.getUart().print("!!! EXCEPTION !!!");
+
+            while (true) {}
+        }
     }
 }

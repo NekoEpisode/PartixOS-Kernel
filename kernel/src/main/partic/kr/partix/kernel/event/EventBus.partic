@@ -1,0 +1,55 @@
+package kr.partix.kernel.event;
+
+import lang.partic.stdlib.additional.collection.map.Map;
+import lang.partic.stdlib.additional.collection.map.HashMap;
+import lang.partic.stdlib.additional.collection.list.ArrayList;
+import lang.partic.stdlib.additional.collection.list.List;
+import lang.partic.stdlib.core.memory.Memory;
+import kr.partix.kernel.exception.NotInitializedException;
+import kr.partix.kernel.boxes.IntegerBox;
+
+class EventBus {
+    private static boolean inited = false;
+    private static Map eventListeners; // <IntegerBox(EventId), List<<? extends IEventListener>>> // TODO: 如果未来加入了多核，则需自行实现ConcurrentHashMap
+    private EventBus() {}
+
+    static void init() {
+        eventListeners = new HashMap();
+        inited = true;
+    }
+
+    static void registerEventListener(int eventId, IEventListener listener) {
+        if (!inited) throw new NotInitializedException("EventBus not initialized!", null);
+        List eventListenerList = (List) eventListeners.get(new IntegerBox(eventId));
+        if (eventListenerList != null) {
+            // 已有List
+            eventListenerList.add(listener);
+        } else {
+            // 未找到
+            List list = new ArrayList(); // TODO: 同上，未来需要线程安全
+            list.add(listener);
+            List listReplaced = (List) eventListeners.put(new IntegerBox(eventId), list);
+            if (listReplaced != null) {
+                // 有被替换掉的旧值就free掉
+                Memory.free((long) listReplaced);
+            }
+        }
+    }
+
+    static void call(AEvent event) {
+        if (!inited) throw new NotInitializedException("EventBus not initialized!", null);
+        if (event != null) {
+            List eventListenerList = (List) eventListeners.get(new IntegerBox(event.getEventId()));
+            if (eventListenerList != null) {
+                for (int i = 0; i < eventListenerList.size(); i++) {
+                    ((IEventListener) eventListenerList.get(i)).onEvent(event);
+                }
+            }
+        }
+    }
+
+    static void dispose() {
+        eventListeners.disposeAll();
+        inited = false;
+    }
+}

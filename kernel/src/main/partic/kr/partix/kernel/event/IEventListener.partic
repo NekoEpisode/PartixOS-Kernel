@@ -1,0 +1,7 @@
+package kr.partix.kernel.event;
+
+import lang.partic.stdlib.core.Object;
+
+interface IEventListener {
+    int onEvent(AEvent event);
+}

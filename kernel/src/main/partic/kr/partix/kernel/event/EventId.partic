@@ -1,0 +1,6 @@
+package kr.partix.kernel.event;
+
+class EventId {
+    // 放置所有事件ID
+    static final int TEST_EVENT = 0;
+}

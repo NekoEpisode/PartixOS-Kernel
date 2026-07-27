@@ -1,0 +1,5 @@
+package kr.partix.kernel.event;
+
+abstract class AEvent {
+    abstract int getEventId();
+}

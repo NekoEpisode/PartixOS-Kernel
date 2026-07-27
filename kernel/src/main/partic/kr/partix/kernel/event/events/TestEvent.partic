@@ -1,0 +1,15 @@
+package kr.partix.kernel.event.events;
+
+import kr.partix.kernel.event.EventId;
+import kr.partix.kernel.event.AEvent;
+
+class TestEvent extends AEvent {
+    private final int testInt;
+
+    TestEvent(int testInt) {
+        this.testInt = testInt;
+    }
+
+    int getEventId() -> EventId.TEST_EVENT
+    int getTestInt() -> testInt
+}

@@ -1,0 +1,23 @@
+package kr.partix.kernel.boxes;
+
+import lang.partic.stdlib.core.Object;
+
+class IntegerBox {
+    private final int boxed;
+
+    IntegerBox(int boxed) {
+        this.boxed = boxed;
+    }
+
+    boolean equals(Object o) {
+        if (o instanceof IntegerBox) {
+            IntegerBox integerBox = (IntegerBox) o;
+            if (integerBox.getBoxed() == boxed) return true;
+        }
+        return false;
+    }
+
+    int hashCode() -> boxed
+    str toStr() -> "IntegerBox"
+    int getBoxed() -> boxed
+}

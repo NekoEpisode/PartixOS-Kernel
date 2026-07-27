@@ -1,0 +1,6 @@
+package kr.partix.kernel.event;
+
+class EventHandleResult {
+    static final int HANDLE_OK = 0;
+    static final int ERROR = 1;
+}

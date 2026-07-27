@@ -1,0 +1,24 @@
+package kr.partix.kernel.event.eventlisteners;
+
+import kr.partix.kernel.event.IEventListener;
+import kr.partix.kernel.event.AEvent;
+import kr.partix.kernel.event.EventHandleResult;
+import kr.partix.kernel.event.events.TestEvent;
+import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+
+class TestEventListener implements IEventListener {
+    int onEvent(AEvent event) {
+        if (event instanceof TestEvent) {
+            TestEvent testEvent = (TestEvent) event;
+            int value = testEvent.getTestInt();
+            StrBuilder strBuilder = new StrBuilder();
+            strBuilder.append("Get TestInt: ");
+            strBuilder.append(StrUtils.toDec(value));
+            BspKrMain.arch.getUart().print(strBuilder.build());
+            strBuilder.dispose();
+        }
+        return EventHandleResult.HANDLE_OK;
+    }
+}
