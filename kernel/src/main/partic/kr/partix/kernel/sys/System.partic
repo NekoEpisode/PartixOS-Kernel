@@ -4,7 +4,7 @@ import kr.partix.kernel.arch.IArch;
 import kr.partix.kernel.arch.ArchRegistry;
 
 class System {
-    extern short archId; // 0 for x86_64
+    extern short archId; // 0 for x86_64, 1 for RISC-V
 
     extern void write8(long addr, byte data);
     extern byte read8(long addr);
