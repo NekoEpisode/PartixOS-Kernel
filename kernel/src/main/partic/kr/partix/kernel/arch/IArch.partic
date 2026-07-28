@@ -3,6 +3,7 @@ package kr.partix.kernel.arch;
 import kr.partix.kernel.io.uart.IUART;
 import kr.partix.kernel.io.pci.IPCIIO;
 import kr.partix.kernel.interrupt.IInterruptController;
+import kr.partix.kernel.paging.IPageTableManager;
 
 interface IArch {
     void init();
@@ -11,4 +12,5 @@ interface IArch {
     IUART getUart();
     IPCIIO getPciIo();
     IInterruptController getInterruptController();
+    IPageTableManager getPageTableManager();
 }

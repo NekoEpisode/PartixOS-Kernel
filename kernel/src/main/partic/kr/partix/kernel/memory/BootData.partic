@@ -1,0 +1,13 @@
+package kr.partix.kernel.memory;
+
+class BootData {
+    private BootData() {}
+
+    private extern long uefi_mmap_addr;
+    private extern long uefi_mmap_size;
+    private extern long uefi_mmap_desc_size;
+
+    static long getMmapAddr() -> uefi_mmap_addr
+    static long getMmapSize() -> uefi_mmap_size
+    static long getDescSize() -> uefi_mmap_desc_size
+}

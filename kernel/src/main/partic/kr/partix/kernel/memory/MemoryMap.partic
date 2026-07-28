@@ -1,0 +1,53 @@
+package kr.partix.kernel.memory;
+
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.additional.collection.list.ArrayList;
+import lang.partic.stdlib.additional.collection.list.List;
+
+class MemoryMapEntry {
+    long start;
+    long pages;
+    int type;
+
+    MemoryMapEntry(long start, long pages, int type) {
+        this.start = start;
+        this.pages = pages;
+        this.type = type;
+    }
+}
+
+class MemoryMap {
+    private static long mmap;
+    private static long mmapSize;
+    private static long descSize;
+    private static int descCount;
+
+    private static List<MemoryMapEntry> freeRanges;
+    private static long totalFreePages;
+
+    static void init() {
+        mmap = BootData.getMmapAddr();
+        mmapSize = BootData.getMmapSize();
+        descSize = BootData.getDescSize();
+
+        descCount = (int)(mmapSize / descSize);
+        freeRanges = new ArrayList<MemoryMapEntry>();
+        totalFreePages = 0;
+
+        for (int i = 0; i < descCount; i++) {
+            long base = mmap + (long)i * descSize;
+            int type = System.read32(base);
+            long physStart = System.read64(base + 8);
+            long pages = System.read64(base + 24);
+
+            if (isFreeType(type) && pages > 0) {
+                freeRanges.add(new MemoryMapEntry(physStart, pages, type));
+                totalFreePages += pages;
+            }
+        }
+    }
+
+    static List<MemoryMapEntry> getFreeRanges() -> freeRanges
+    static long getTotalFreePages() -> totalFreePages
+    private static boolean isFreeType(int type) -> type == 7 || type == 3 || type == 4
+}

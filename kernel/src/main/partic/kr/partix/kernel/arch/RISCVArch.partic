@@ -6,16 +6,23 @@ import kr.partix.kernel.io.pci.IPCIIO;
 import kr.partix.kernel.arch.riscv.RISCVPCIIO;
 import kr.partix.kernel.interrupt.IInterruptController;
 import kr.partix.kernel.arch.riscv.RISCVInterruptController;
+import kr.partix.kernel.paging.IPageTableManager;
+import kr.partix.kernel.arch.riscv.RISCVPageTableManager;
 
 class RISCVArch implements IArch {
     private final IUART uart;
     private final IPCIIO pciIo;
     private final RISCVInterruptController ic;
+    private final RISCVPageTableManager ptm;
+
+    private extern long fdt_get_uart_base();
+    private extern long fdt_get_pcie_base();
 
     RISCVArch() {
-        uart = new RISCVUART(0x10000000);
-        pciIo = new RISCVPCIIO(0x30000000);
+        uart = new RISCVUART(fdt_get_uart_base());
+        pciIo = new RISCVPCIIO(fdt_get_pcie_base());
         ic = new RISCVInterruptController();
+        ptm = new RISCVPageTableManager();
     }
 
     void init() {
@@ -27,4 +34,5 @@ class RISCVArch implements IArch {
     IUART getUart() -> uart
     IPCIIO getPciIo() -> pciIo
     IInterruptController getInterruptController() -> ic
+    IPageTableManager getPageTableManager() -> ptm
 }

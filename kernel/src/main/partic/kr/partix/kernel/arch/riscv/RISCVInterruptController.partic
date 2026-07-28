@@ -7,14 +7,18 @@ import kr.partix.kernel.interrupt.IInterruptData;
 import kr.partix.kernel.interrupt.Interrupt;
 
 class RISCVInterruptController implements IInterruptController {
-    private static final long PLIC_BASE = 0x0C000000L;
+    private static long plicBase;
 
     private final IInterruptHandler[] handlers = new IInterruptHandler[256];
 
     private boolean plicReady = false;
 
+    private extern long fdt_get_plic_base();
+
     void init() {
-        // TODO: need bootloader to map PLIC (0x0C000000) in page tables
+        plicBase = fdt_get_plic_base();
+        ensurePlic();
+        System.enableInterrupts();
     }
 
     private void ensurePlic() {
@@ -45,7 +49,7 @@ class RISCVInterruptController implements IInterruptController {
     }
 
     void eoi(int vector) {
-        System.write32(PLIC_BASE + 0x200004L, vector);
+        System.write32(plicBase + 0x200004L, vector);
     }
 
     void dispatch(int cause, long epc, long sp, long frame) {
@@ -61,16 +65,16 @@ class RISCVInterruptController implements IInterruptController {
     private static void writeEnable(long src, boolean on) {
         long offset = 0x2000 + (src / 32) * 4;
         int bit = (int)(src % 32);
-        int val = System.read32(PLIC_BASE + offset);
+        int val = System.read32(plicBase + offset);
         if (on) val |= (1 << bit);
         else    val &= ~(1 << bit);
-        System.write32(PLIC_BASE + offset, val);
+        System.write32(plicBase + offset, val);
     }
 
     private static void writePriority(long src, int prio) {
-        System.write32(PLIC_BASE + src * 4, prio);
+        System.write32(plicBase + src * 4, prio);
     }
     private static void writeThreshold(int thresh) {
-        System.write32(PLIC_BASE + 0x200000L, thresh);
+        System.write32(plicBase + 0x200000L, thresh);
     }
 }

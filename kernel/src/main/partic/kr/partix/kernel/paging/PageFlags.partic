@@ -1,0 +1,10 @@
+package kr.partix.kernel.paging;
+
+class PageFlags {
+    static final int PRESENT  = 1;
+    static final int WRITABLE = 2;
+    static final int USER     = 4;
+    static final int NO_EXEC  = 8;
+    static final int HUGE     = 16;
+    static final int MMIO     = 32;
+}

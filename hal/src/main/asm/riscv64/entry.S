@@ -10,6 +10,10 @@ kern_entry:
     la  sp, _stack_top
     la  gp, __global_pointer$
 
+    # Disable all interrupts inherited from UEFI
+    csrw sie, zero
+    csrci sstatus, 0x2
+
     # Zero BSS
     la  t0, __bss_start
     la  t1, __bss_end
@@ -27,7 +31,10 @@ kern_entry:
     la  t0, trap_entry
     csrw stvec, t0
 
-    # sie deferred — enabled by Partic after init is done
+    # Save kernel sp in sscratch for trap entry swap
+    csrw sscratch, sp
+
+    # Interrupts enabled later by Partic after all init is done
 
     # Pass BootInfo* to kernel_entry
     mv  a0, s0
@@ -39,13 +46,9 @@ kern_entry:
 .section .text
 .align 4
 trap_entry:
-    # Swap sp with sscratch to get kernel stack
+    # Atomically swap sp and sscratch
+    # sp -> sscratch (kernel_sp saved), sscratch -> sp (interrupted_sp saved)
     csrrw sp, sscratch, sp
-    bnez sp, 1f
-    # sscratch was 0 — first trap, reload sp from _stack_top
-    csrr sp, sscratch
-    la   sp, _stack_top
-1:
 
     # Save all registers to trap frame (skip x0)
     addi sp, sp, -256
@@ -130,6 +133,8 @@ trap_entry:
     ld   t6,  232(sp)
 
     addi sp, sp, 256
+    # Restore interrupted sp from sscratch, save kernel_sp back
+    csrrw sp, sscratch, sp
     sret
 
 boot_hartid:

@@ -1,0 +1,95 @@
+package kr.partix.kernel.arch.riscv;
+
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.core.memory.Memory;
+import kr.partix.kernel.memory.BootData;
+import kr.partix.kernel.paging.IPageTableManager;
+import kr.partix.kernel.paging.PageFlags;
+
+class RISCVPageTableManager implements IPageTableManager {
+    private extern void paging_load_satp(long satp);
+
+    private static final long PTE_V = 1;
+    private static final long PTE_R = 2;
+    private static final long PTE_W = 4;
+    private static final long PTE_X = 8;
+    private static final long PTE_U = 16;
+    private static final long PTE_G = 32;
+    private static final long PTE_A = 64;
+    private static final long PTE_D = 128;
+
+    private static final long SATP_MODE_SV39 = 8L << 60;
+
+    private long pgd;
+
+    private static long allocZeroPage() {
+        long addr = Memory.malloc(8192);
+        addr = (addr + 4095) & ~4095;
+        for (int i = 0; i < 512; i++) {
+            System.write64(addr + (long)i * 8, 0);
+        }
+        return addr;
+    }
+
+    void init() {
+        pgd = allocZeroPage();
+        buildIdentityMap();
+    }
+
+    private void buildIdentityMap() {
+        long maxPhys = findMaxPhys();
+        if (maxPhys == 0) return;
+
+        int pmdCount = (int)((maxPhys + 0x3FFFFFFF) / 0x40000000);
+        if (pmdCount < 1) pmdCount = 1;
+
+        for (int gb = 0; gb < pmdCount; gb++) {
+            long pmd = allocZeroPage();
+            System.write64(pgd + (long)gb * 8, (pmd >> 2) | PTE_V);
+
+            for (int mb = 0; mb < 512; mb++) {
+                long phys = (long)gb * 0x40000000 + (long)mb * 0x200000;
+                if (phys > maxPhys) break;
+
+                long entry = (phys >> 2) | PTE_V | PTE_R | PTE_W | PTE_X |
+                             PTE_A | PTE_D;
+                System.write64(pmd + (long)mb * 8, entry);
+            }
+        }
+    }
+
+    void map(long virt, long phys, long size, int flags) {
+        long entry = (phys >> 2);
+        entry |= PTE_V | PTE_A | PTE_D;
+        if ((flags & PageFlags.WRITABLE) != 0) entry |= PTE_W;
+        if ((flags & PageFlags.NO_EXEC) == 0) entry |= PTE_X;
+        if ((flags & PageFlags.USER) != 0) entry |= PTE_U;
+
+        int pmdIndex = (int)(virt / 0x40000000);
+        int mbIndex = (int)((virt % 0x40000000) / 0x200000);
+
+        long pgdEntry = System.read64(pgd + (long)pmdIndex * 8);
+        long pmd = (pgdEntry & ~0x3FF) << 2;
+        System.write64(pmd + (long)mbIndex * 8, entry);
+    }
+
+    void load() {
+        long satp = SATP_MODE_SV39 | (pgd >> 12);
+        paging_load_satp(satp);
+    }
+
+    private long findMaxPhys() {
+        long max = 0;
+        long descSize = BootData.getDescSize();
+        int count = (int)(BootData.getMmapSize() / descSize);
+
+        for (int i = 0; i < count; i++) {
+            long base = BootData.getMmapAddr() + (long)i * descSize;
+            long physStart = System.read64(base + 8);
+            long pages = System.read64(base + 24);
+            long end = physStart + pages * 4096;
+            if (end > max) max = end;
+        }
+        return max;
+    }
+}

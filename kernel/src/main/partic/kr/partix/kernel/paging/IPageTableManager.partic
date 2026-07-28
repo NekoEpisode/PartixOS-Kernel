@@ -1,0 +1,7 @@
+package kr.partix.kernel.paging;
+
+interface IPageTableManager {
+    void init();
+    void map(long virt, long phys, long size, int flags);
+    void load();
+}

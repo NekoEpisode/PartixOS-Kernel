@@ -18,6 +18,8 @@ import kr.partix.kernel.event.eventlisteners.TestEventListener;
 import kr.partix.kernel.event.eventlisteners.UnknownInterruptEventListener;
 import kr.partix.kernel.event.events.TestEvent;
 import kr.partix.kernel.interrupt.Interrupt;
+import kr.partix.kernel.memory.MemoryMap;
+import kr.partix.kernel.paging.IPageTableManager;
 
 class BspKrMain {
     static IArch arch;
@@ -27,6 +29,15 @@ class BspKrMain {
             ArchRegistry.init();
 
             arch = System.getArch();
+
+            EventBus.init();
+            EventBus.registerEventListener(EventId.INTERRUPT_EVENT, new UnknownInterruptEventListener());
+            EventBus.registerEventListener(EventId.TEST_EVENT, new TestEventListener());
+
+            MemoryMap.init();
+            arch.getPageTableManager().init();
+            arch.getPageTableManager().load();
+
             arch.init();
 
             StrBuilder strBuilder = new StrBuilder();
@@ -71,14 +82,7 @@ class BspKrMain {
                 Memory.free(builded);
             }
 
-            EventBus.init();
-            EventBus.registerEventListener(EventId.INTERRUPT_EVENT, new UnknownInterruptEventListener());
-            EventBus.registerEventListener(EventId.TEST_EVENT, new TestEventListener());
             EventBus.call(new TestEvent(42));
-
-            asm {
-                "int $0x20";
-            }
 
             while (true) {}
         } catch (Exception e) {

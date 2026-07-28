@@ -1,0 +1,87 @@
+package kr.partix.kernel.arch.x86;
+
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.core.memory.Memory;
+import kr.partix.kernel.memory.BootData;
+import kr.partix.kernel.paging.IPageTableManager;
+import kr.partix.kernel.paging.PageFlags;
+
+class X86PageTableManager implements IPageTableManager {
+    private extern void paging_load_cr3(long cr3);
+
+    private static final long PML4E_PRESENT  = 1;
+    private static final long PML4E_RW       = 2;
+    private static final long PDE_PS_2MB     = 0x80;
+    private static final long PDE_NX         = 0x8000000000000000L;
+
+    private long pml4;
+
+    private static long allocZeroPage() {
+        long addr = Memory.malloc(8192);
+        addr = (addr + 4095) & ~4095;
+        for (int i = 0; i < 512; i++) {
+            System.write64(addr + (long)i * 8, 0);
+        }
+        return addr;
+    }
+
+    void init() {
+        pml4 = allocZeroPage();
+        buildIdentityMap();
+    }
+
+    private void buildIdentityMap() {
+        long maxPhys = findMaxPhys();
+        if (maxPhys == 0) return;
+
+        int pdCount = (int)((maxPhys + 0x3FFFFFFF) / 0x40000000);
+        if (pdCount < 1) pdCount = 1;
+
+        long pdpt = allocZeroPage();
+        System.write64(pml4, pdpt | PML4E_PRESENT | PML4E_RW);
+
+        for (int gb = 0; gb < pdCount; gb++) {
+            long pd = allocZeroPage();
+            System.write64(pdpt + (long)gb * 8, pd | PML4E_PRESENT | PML4E_RW);
+
+            for (int mb = 0; mb < 512; mb++) {
+                long phys = (long)gb * 0x40000000 + (long)mb * 0x200000;
+                if (phys > maxPhys) break;
+                long entry = phys | PML4E_PRESENT | PML4E_RW | PDE_PS_2MB;
+                System.write64(pd + (long)mb * 8, entry);
+            }
+        }
+    }
+
+    void map(long virt, long phys, long size, int flags) {
+        long entry = phys | PML4E_PRESENT | PDE_PS_2MB;
+        if ((flags & PageFlags.WRITABLE) != 0) entry |= PML4E_RW;
+        if ((flags & PageFlags.NO_EXEC) != 0) entry |= PDE_NX;
+
+        int pdIndex = (int)(virt / 0x40000000);
+        int mbIndex = (int)((virt % 0x40000000) / 0x200000);
+
+        long pdBase = System.read64(pml4) & ~0xFFF;
+        long pd = System.read64(pdBase + (long)pdIndex * 8) & ~0xFFF;
+        System.write64(pd + (long)mbIndex * 8, entry);
+    }
+
+    void load() {
+        paging_load_cr3(pml4);
+    }
+
+    private long findMaxPhys() {
+        long max = 0;
+        long descSize = BootData.getDescSize();
+        int count = (int)(BootData.getMmapSize() / descSize);
+
+        for (int i = 0; i < count; i++) {
+            long base = BootData.getMmapAddr() + (long)i * descSize;
+            long physStart = System.read64(base + 8);
+            long pages = System.read64(base + 24);
+            long end = physStart + pages * 4096;
+            if (end > max) max = end;
+        }
+        return max;
+    }
+}

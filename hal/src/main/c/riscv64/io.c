@@ -1,7 +1,8 @@
 #include <stdint.h>
 
 void enableInterrupts() {
-    __asm__ volatile("csrw sie, %0" :: "r"(0x222));
+    __asm__ volatile("csrw sie, %0" :: "r"(0x202));
+    __asm__ volatile("csrsi sstatus, 0x2");
 }
 
 void write8(uint64_t addr, uint8_t data) {

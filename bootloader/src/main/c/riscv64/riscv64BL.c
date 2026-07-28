@@ -3,11 +3,13 @@
 #include "../include/Protocol/GraphicsOutput.h"
 #include "../include/Protocol/LoadedImage.h"
 #include "../include/Protocol/SimpleFileSystem.h"
+#include "../include/Guid/Fdt.h"
 
 typedef struct {
     void*    framebuffer;
     UINT64   width, height, stride, format;
     UINT64   memoryMap, memoryMapSize, memoryMapDescriptorSize;
+    void*    fdt_addr;
 } BootInfo;
 
 #define ET_EXEC  2
@@ -120,6 +122,19 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE h, EFI_SYSTEM_TABLE* st) {
     BootInfo info;
 
     st->ConOut->OutputString(st->ConOut, L"Partix RV64\r\n");
+
+    info.fdt_addr = 0;
+    {
+        EFI_GUID fdtGuid = FDT_TABLE_GUID;
+        for (UINTN i = 0; i < st->NumberOfTableEntries; i++) {
+            UINT32* a = (UINT32*)&st->ConfigurationTable[i].VendorGuid;
+            UINT32* b = (UINT32*)&fdtGuid;
+            if (a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]) {
+                info.fdt_addr = st->ConfigurationTable[i].VendorTable;
+                break;
+            }
+        }
+    }
 
     setup_gop(bs, &info);
 
