@@ -76,6 +76,7 @@ class X86_64KernelBuilder(Builder):
                 allocator="KrAlloc",
                 target="freestanding",
                 debug=self._debug,
+                show_stderr=getattr(self, '_show_stderr', False),
             )
             partic_o = obj_dir / "partic.o"
             cmd = [tc.compiler(), *cflags, "-c", str(partic_ll), "-o", str(partic_o)]

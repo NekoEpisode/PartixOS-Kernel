@@ -47,6 +47,8 @@ def _build_component(comp_name: str, args: argparse.Namespace, dep_objects: dict
 
     if hasattr(builder, '_debug'):
         builder._debug = args.g
+    if hasattr(builder, '_show_stderr'):
+        builder._show_stderr = args.show_partic_compiler_err
 
     if hasattr(builder, 'build'):
         import inspect
@@ -183,6 +185,7 @@ def main() -> int:
     build_parser.add_argument("--linker", default="", help="override linker path")
     build_parser.add_argument("--build-root", default=".", help="root for build output")
     build_parser.add_argument("--g", action="store_true", help="enable debug info")
+    build_parser.add_argument("--show-partic-compiler-err", action="store_true", help="always show Partic stderr")
 
     run_parser = sub.add_parser("run", help="build all + create disk image + launch QEMU")
     run_parser.add_argument("--target", default="x86_64", help="build target architecture")
@@ -191,6 +194,7 @@ def main() -> int:
     run_parser.add_argument("--build-root", default=".", help="root for build output")
     run_parser.add_argument("--qemu-args", default="", help="extra QEMU arguments")
     run_parser.add_argument("--g", action="store_true", help="enable debug info for all components")
+    run_parser.add_argument("--show-partic-compiler-err", action="store_true", help="always show Partic stderr")
 
     sub.add_parser("targets", help="list available targets")
     sub.add_parser("components", help="list registered components with dependencies")

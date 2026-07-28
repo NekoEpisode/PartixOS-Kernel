@@ -10,25 +10,25 @@ import kr.partix.kernel.boxes.IntegerBox;
 
 class EventBus {
     private volatile static boolean inited = false;
-    private static Map eventListeners; // <IntegerBox(EventId), List<<? extends IEventListener>>> // TODO: 如果未来加入了多核，则需自行实现ConcurrentHashMap
+    private static Map<IntegerBox, List<IEventListener>> eventListeners; // TODO: 如果未来加入了多核，则需自行实现ConcurrentHashMap
     private EventBus() {}
 
     static void init() {
-        eventListeners = new HashMap();
+        eventListeners = new HashMap<IntegerBox, List<IEventListener>>();
         inited = true;
     }
 
     static void registerEventListener(int eventId, IEventListener listener) {
         if (!inited) throw new NotInitializedException("EventBus not initialized!", null);
-        List eventListenerList = (List) eventListeners.get(new IntegerBox(eventId));
+        List<IEventListener> eventListenerList = eventListeners.get(new IntegerBox(eventId));
         if (eventListenerList != null) {
             // 已有List
             eventListenerList.add(listener);
         } else {
             // 未找到
-            List list = new ArrayList(); // TODO: 同上，未来需要线程安全
+            List<IEventListener> list = new ArrayList<IEventListener>(); // TODO: 同上，未来需要线程安全
             list.add(listener);
-            List listReplaced = (List) eventListeners.put(new IntegerBox(eventId), list);
+            List<IEventListener> listReplaced = eventListeners.put(new IntegerBox(eventId), list);
             if (listReplaced != null) {
                 // 有被替换掉的旧值就free掉
                 Memory.free((long) listReplaced);
@@ -39,10 +39,10 @@ class EventBus {
     static void call(AEvent event) {
         if (!inited) return;
         if (event != null) {
-            List eventListenerList = (List) eventListeners.get(new IntegerBox(event.getEventId()));
+            List<IEventListener> eventListenerList = eventListeners.get(new IntegerBox(event.getEventId()));
             if (eventListenerList != null) {
                 for (int i = 0; i < eventListenerList.size(); i++) {
-                    ((IEventListener) eventListenerList.get(i)).onEvent(event);
+                    eventListenerList.get(i).onEvent(event);
                 }
             }
         }

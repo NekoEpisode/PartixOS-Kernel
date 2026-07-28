@@ -37,6 +37,7 @@ def compile_partic(
     allocator: str = "KrAlloc",
     target: str = "freestanding",
     debug: bool = False,
+    show_stderr: bool = False,
 ) -> Path:
     settings = load_settings()
     pc = settings.partic
@@ -72,7 +73,7 @@ def compile_partic(
         cmd += ["--rtdir", pc.stdlib]
     cmd.append(str(stage))
 
-    run_cmd(cmd, desc=f"partic -> LLVM IR ({len(partic_files)} files)")
+    run_cmd(cmd, desc=f"partic -> LLVM IR ({len(partic_files)} files)", show_stderr=show_stderr)
 
     ll_files = list(stage.rglob("*.ll")) + list(stage.parent.rglob("*.ll"))
     if not ll_files:
