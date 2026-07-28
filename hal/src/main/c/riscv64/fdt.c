@@ -137,6 +137,7 @@ void fdt_init(void *fdt_ptr) {
     }
 }
 
+/* Auto fallback to QEMU */
 uint64_t fdt_get_uart_base(void) {
     return fdt_uart_base ? fdt_uart_base : 0x10000000;
 }
