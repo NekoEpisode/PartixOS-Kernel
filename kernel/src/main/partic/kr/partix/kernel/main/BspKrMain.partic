@@ -75,7 +75,10 @@ class BspKrMain {
             EventBus.registerEventListener(EventId.INTERRUPT_EVENT, new UnknownInterruptEventListener());
             EventBus.registerEventListener(EventId.TEST_EVENT, new TestEventListener());
             EventBus.call(new TestEvent(42));
-            EventBus.dispose();
+
+            asm {
+                "int $0x20";
+            }
 
             while (true) {}
         } catch (Exception e) {

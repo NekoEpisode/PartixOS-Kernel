@@ -66,3 +66,7 @@ uint64_t read64(uint64_t addr) {
 void halt() {
     __asm__ volatile ("hlt");
 }
+
+void enableInterrupts() {
+    __asm__ volatile ("sti");
+}

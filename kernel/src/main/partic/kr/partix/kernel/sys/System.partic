@@ -15,6 +15,7 @@ class System {
     extern void write64(long addr, long data);
     extern long read64(long addr);
     extern void halt();
+    extern void enableInterrupts();
 
     static IArch getArch() -> ArchRegistry.get(archId)
 }

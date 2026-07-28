@@ -37,7 +37,7 @@ class EventBus {
     }
 
     static void call(AEvent event) {
-        if (!inited) return;
+        if (!inited) throw new NotInitializedException("EventBus not initialized!", null);
         if (event != null) {
             List<IEventListener> eventListenerList = eventListeners.get(new IntegerBox(event.getEventId()));
             if (eventListenerList != null) {

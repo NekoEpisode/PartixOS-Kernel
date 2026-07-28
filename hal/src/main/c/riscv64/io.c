@@ -1,5 +1,9 @@
 #include <stdint.h>
 
+void enableInterrupts() {
+    __asm__ volatile("csrw sie, %0" :: "r"(0x222));
+}
+
 void write8(uint64_t addr, uint8_t data) {
     *(volatile uint8_t*)addr = data;
 }

@@ -5,6 +5,9 @@ import kr.partix.kernel.event.AEvent;
 import kr.partix.kernel.event.EventHandleResult;
 import kr.partix.kernel.event.events.InterruptEvent;
 import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.core.memory.Memory;
 
 class UnknownInterruptEventListener implements IEventListener {
     int onEvent(AEvent event) {
@@ -12,7 +15,15 @@ class UnknownInterruptEventListener implements IEventListener {
             InterruptEvent ie = (InterruptEvent) event;
             if (ie.getData() == null) {
                 // Unhandled interrupt — log and ignore
-                BspKrMain.arch.getUart().print("unhandled interrupt: ");
+                StrBuilder sb = new StrBuilder();
+                sb.append("unhandled interrupt: ");
+                str temp = StrUtils.toDec(ie.getVector());
+                sb.append(temp);
+                Memory.free(temp);
+                str builded = sb.build();
+                BspKrMain.arch.getUart().println(builded);
+                Memory.free(builded);
+                sb.dispose();
             }
         }
         return EventHandleResult.HANDLE_OK;

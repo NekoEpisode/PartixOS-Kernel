@@ -32,6 +32,8 @@ class X86InterruptController implements IInterruptController {
         pic2Mask = 0xFF;
         System.write8(PIC1_DATA, (byte) pic1Mask);
         System.write8(PIC2_DATA, (byte) pic2Mask);
+
+        System.enableInterrupts();
     }
 
     void registerHandler(int vector, IInterruptHandler handler) {

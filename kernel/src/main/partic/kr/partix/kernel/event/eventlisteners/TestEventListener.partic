@@ -16,7 +16,7 @@ class TestEventListener implements IEventListener {
             StrBuilder strBuilder = new StrBuilder();
             strBuilder.append("Get TestInt: ");
             strBuilder.append(StrUtils.toDec(value));
-            BspKrMain.arch.getUart().print(strBuilder.build());
+            BspKrMain.arch.getUart().println(strBuilder.build());
             strBuilder.dispose();
         }
         return EventHandleResult.HANDLE_OK;
