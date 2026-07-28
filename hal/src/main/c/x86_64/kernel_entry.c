@@ -1,4 +1,5 @@
 #include "include/idt.h"
+#include "include/io.h"
 #include "include/stdint.h"
 
 uint32_t* gop_framebuffer;
@@ -32,7 +33,7 @@ void kernel_entry(BootInfo* info) {
     asm volatile("cli");
     uint16_t cs = info->cs_selector;
     init_idt(cs);
-    asm volatile("sti");
+    // sti deferred to Partic after all init is done
 
     extern void _start(void);
     _start();

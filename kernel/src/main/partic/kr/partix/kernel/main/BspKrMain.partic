@@ -5,6 +5,7 @@ import kr.partix.kernel.io.UART;
 
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.utils.string.CoreStrUtils;
 import lang.partic.stdlib.core.exception.exception.Exception;
 import lang.partic.stdlib.core.memory.Memory;
 import kr.partix.kernel.arch.ArchRegistry;
@@ -14,7 +15,9 @@ import kr.partix.kernel.io.pci.PCI;
 import kr.partix.kernel.event.EventBus;
 import kr.partix.kernel.event.EventId;
 import kr.partix.kernel.event.eventlisteners.TestEventListener;
+import kr.partix.kernel.event.eventlisteners.UnknownInterruptEventListener;
 import kr.partix.kernel.event.events.TestEvent;
+import kr.partix.kernel.interrupt.Interrupt;
 
 class BspKrMain {
     static IArch arch;
@@ -69,6 +72,7 @@ class BspKrMain {
             }
 
             EventBus.init();
+            EventBus.registerEventListener(EventId.INTERRUPT_EVENT, new UnknownInterruptEventListener());
             EventBus.registerEventListener(EventId.TEST_EVENT, new TestEventListener());
             EventBus.call(new TestEvent(42));
             EventBus.dispose();

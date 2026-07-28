@@ -1,0 +1,20 @@
+package kr.partix.kernel.event.eventlisteners;
+
+import kr.partix.kernel.event.IEventListener;
+import kr.partix.kernel.event.AEvent;
+import kr.partix.kernel.event.EventHandleResult;
+import kr.partix.kernel.event.events.InterruptEvent;
+import kr.partix.kernel.main.BspKrMain;
+
+class UnknownInterruptEventListener implements IEventListener {
+    int onEvent(AEvent event) {
+        if (event instanceof InterruptEvent) {
+            InterruptEvent ie = (InterruptEvent) event;
+            if (ie.getData() == null) {
+                // Unhandled interrupt — log and ignore
+                BspKrMain.arch.getUart().print("unhandled interrupt: ");
+            }
+        }
+        return EventHandleResult.HANDLE_OK;
+    }
+}

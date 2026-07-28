@@ -46,14 +46,11 @@ static void idt_set_gate(idt_entry_t* entry, void* handler, uint16_t selector, u
     entry->reserved      = 0;
 }
 
-// Bridges interrupt to Partic
-extern void kr_partix_kernel_interrupt_InterruptBridge_dispatch__IJJJV(
-    int cause, uint64_t epc, uint64_t sp, uint64_t frame);
-
 __attribute__((interrupt))
 void default_handler(interrupt_frame_t* frame) {
-    kr_partix_kernel_interrupt_InterruptBridge_dispatch__IJJJV(
-        (int)(frame->vector), frame->rip, frame->rsp, (uint64_t)frame);
+    volatile int vec = (int)(frame->vector);
+    (void)vec;
+    while (1) { __asm__("cli; hlt"); }
 }
 
 void init_idt(uint16_t uefi_cs_selector) {
@@ -68,5 +65,4 @@ void init_idt(uint16_t uefi_cs_selector) {
         .base  = (uint64_t)idt
     };
     asm volatile("lidt %0" : : "m"(idtr));
-    asm volatile("sti");
 }

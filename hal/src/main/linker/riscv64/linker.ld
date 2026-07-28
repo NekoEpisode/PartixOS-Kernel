@@ -7,7 +7,15 @@ SECTIONS
     . = 0x80200000;
 
     .text : {
-        *(.text.entry) *(.text*) *(.rodata*) *(.data*)
+        *(.text.entry) *(.text*)
+    }
+
+    .rodata : {
+        *(.rodata*)
+    }
+
+    .data : {
+        *(.data*)
     }
 
     .eh_frame_hdr : {

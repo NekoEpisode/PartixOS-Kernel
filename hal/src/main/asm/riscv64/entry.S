@@ -27,9 +27,7 @@ kern_entry:
     la  t0, trap_entry
     csrw stvec, t0
 
-    # Enable interrupts in S-mode (sie)
-    li  t0, 0x222         # SSIE | STIE | SEIE
-    csrw sie, t0
+    # sie deferred — enabled by Partic after init is done
 
     # Pass BootInfo* to kernel_entry
     mv  a0, s0

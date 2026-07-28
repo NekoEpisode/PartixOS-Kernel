@@ -18,7 +18,6 @@ class X86InterruptController implements IInterruptController {
     private int pic2Mask;
 
     void init() {
-        // Remap: master → 0x20, slave → 0x28
         System.write8(PIC1_CMD, (byte) 0x11);
         System.write8(PIC1_DATA, (byte) IRQ_BASE);
         System.write8(PIC1_DATA, (byte) 0x04);
@@ -29,8 +28,7 @@ class X86InterruptController implements IInterruptController {
         System.write8(PIC2_DATA, (byte) 0x02);
         System.write8(PIC2_DATA, (byte) 0x01);
 
-        // Mask everything initially
-        pic1Mask = 0xFF & ~(1 << 2);  // unmask slave PIC cascade
+        pic1Mask = 0xFF & ~(1 << 2);
         pic2Mask = 0xFF;
         System.write8(PIC1_DATA, (byte) pic1Mask);
         System.write8(PIC2_DATA, (byte) pic2Mask);
@@ -72,9 +70,7 @@ class X86InterruptController implements IInterruptController {
         int irq = vector - IRQ_BASE;
         if (irq >= 0 && irq < 16) {
             System.write8(PIC1_CMD, (byte) 0x20);
-            if (irq >= 8) {
-                System.write8(PIC2_CMD, (byte) 0x20);
-            }
+            if (irq >= 8) System.write8(PIC2_CMD, (byte) 0x20);
         }
     }
 

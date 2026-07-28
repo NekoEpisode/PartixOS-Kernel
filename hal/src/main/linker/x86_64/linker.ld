@@ -12,7 +12,6 @@ SECTIONS
 
     .rodata : {
         *(.rodata .rodata.*)
-        KEEP(*(.data))
     }
 
     .data : {
