@@ -1,0 +1,36 @@
+package kr.partix.kernel.io.screen;
+
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.sys.ReturnCode;
+
+class UefiFramebufferScreen implements IScreen {
+    private extern long gop_framebuffer;
+    private extern long gop_width;
+    private extern long gop_height;
+    private extern long gop_stride;
+
+    long getWidth()  -> gop_width
+    long getHeight() -> gop_height
+    long getStride() -> gop_stride
+    long getFramebufferSize() -> gop_height * gop_stride
+
+    int* getFramebuffer() -> (int*) gop_framebuffer
+
+    void blt(int* src, long x, long y, long w, long h) {
+        long fb = gop_framebuffer;
+        long stride = gop_stride;
+        if (fb == 0) return;
+
+        for (long row = 0; row < h; row++) {
+            for (long col = 0; col < w; col++) {
+                int pixel = src[(int)(row * w + col)];
+                long offset = ((y + row) * stride + (x + col)) * 4;
+                System.write32(fb + offset, pixel);
+            }
+        }
+    }
+
+    int setMode(long w, long h) -> ReturnCode.ERR_NOT_IMPLEMENTD
+
+    void flush(long x, long y, long w, long h) {}
+}

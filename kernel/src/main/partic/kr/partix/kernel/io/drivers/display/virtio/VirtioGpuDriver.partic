@@ -1,0 +1,187 @@
+package kr.partix.kernel.io.drivers.display.virtio;
+
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.display.IDisplayDriver;
+import kr.partix.kernel.io.pci.PCIDevice;
+import kr.partix.kernel.io.pci.IPCIIO;
+import kr.partix.kernel.io.screen.IScreen;
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.core.memory.Memory;
+
+class VirtioGpuDriverTemplate implements IDisplayDriver {
+    int getType() -> DriverType.DISPLAY
+
+    boolean match(PCIDevice device) -> device.vendorId == 0x1AF4 && device.deviceId == 0x1050
+
+    IDriver create(PCIDevice device) -> new VirtioGpuDriver(device)
+
+    IScreen[] getScreens() -> new IScreen[0]
+}
+
+class VirtioGpuDriver implements IDisplayDriver {
+    private final PCIDevice device;
+    private IScreen[] screens;
+
+    private static final int VIRTIO_STATUS_ACKNOWLEDGE = 1;
+    private static final int VIRTIO_STATUS_DRIVER     = 2;
+    private static final int VIRTIO_STATUS_DRIVER_OK  = 4;
+    private static final int VIRTIO_STATUS_FEATURES_OK = 8;
+    private static final int VIRTIO_STATUS_FAILED      = 128;
+
+    private static final int CAP_VENDOR = 0x09;
+    private static final int CAP_COMMON = 1;
+    private static final int CAP_NOTIFY = 2;
+    private static final int CAP_ISR    = 3;
+    private static final int CAP_DEVICE = 4;
+
+    private extern int virtq_struct_size();
+    private extern int virtio_gpu_dev_size();
+
+    private extern void virtio_gpu_dev_init(long dev, long common_phys,
+                                            long notify_phys, long device_phys,
+                                            long cmdbuf, long respbuf);
+
+    private extern void virtq_init(long q, long desc_phys, long avail_phys,
+                                   long used_phys, int size);
+
+    private extern int virtio_gpu_get_display_info(long dev, long infoOut);
+
+    private extern void virtio_pci_set_status(long common, byte status);
+    private extern void virtio_pci_select_queue(long common, int idx);
+    private extern void virtio_pci_set_queue(long common, long desc,
+                                             long driver, long device);
+    private extern void virtio_pci_enable_queue(long common);
+    private extern void virtio_pci_disable_interrupts(long common);
+    private extern int virtio_pci_get_queue_size(long common);
+    private extern int virtio_pci_get_features(long common);
+    private extern void virtio_pci_set_features(long common, int features);
+
+    VirtioGpuDriver(PCIDevice device) {
+        this.device = device;
+        initDevice();
+    }
+
+    int getType() -> DriverType.DISPLAY
+
+    boolean match(PCIDevice d) -> d.vendorId == 0x1AF4 && d.deviceId == 0x1050
+
+    IDriver create(PCIDevice d) -> new VirtioGpuDriver(d)
+
+    IScreen[] getScreens() -> screens
+
+    private void initDevice() {
+        IPCIIO pciio = BspKrMain.arch.getPciIo();
+        int bus = device.bus;
+        int slot = device.slot;
+        int func = device.func;
+
+        long commonPhys = 0;
+        long notifyPhys = 0;
+        long isrPhys = 0;
+        long devicePhys = 0;
+
+        long[] barBases = new long[6];
+        int bi = 0;
+        while (bi < 6) {
+            long raw = (long) pciio.readConfig32(bus, slot, func, 0x10 + bi * 4);
+            long val = raw & 0xFFFFFFFFL;
+            if (val == 0) { bi++; continue; }
+            if ((val & 1) != 0) { bi++; continue; }
+            int barType = (int)((val >> 1) & 3);
+            if (barType == 2) {
+                long hi = (long) pciio.readConfig32(bus, slot, func, 0x10 + (bi + 1) * 4);
+                barBases[bi] = (val & 0xFFFFFFF0L) | ((hi & 0xFFFFFFFFL) << 32);
+                bi += 2;
+            } else {
+                barBases[bi] = val & 0xFFFFFFF0L;
+                bi++;
+            }
+        }
+
+        int capHeader = pciio.readConfig32(bus, slot, func, 0x34);
+        int cap = capHeader & 0xFF;
+
+        while (cap != 0) {
+            int dword0 = pciio.readConfig32(bus, slot, func, cap);
+            int dword1 = pciio.readConfig32(bus, slot, func, cap + 4);
+            int dword2 = pciio.readConfig32(bus, slot, func, cap + 8);
+
+            int capId   = dword0 & 0xFF;
+            int capNext = (dword0 >> 8) & 0xFF;
+            int cfgType = (dword0 >> 24) & 0xFF;
+            int barId   = dword1 & 0xFF;
+            long offset = (long)(dword2 & 0xFFFFFFFF);
+            long bar    = barBases[barId];
+
+            if (capId == CAP_VENDOR) {
+                if (cfgType == CAP_COMMON) commonPhys = bar + offset;
+                if (cfgType == CAP_NOTIFY) notifyPhys = bar + offset;
+                if (cfgType == CAP_ISR)    isrPhys    = bar + offset;
+                if (cfgType == CAP_DEVICE) devicePhys = bar + offset;
+            }
+
+            cap = capNext;
+        }
+
+        if (commonPhys == 0) return;
+
+        virtio_pci_set_status(commonPhys, (byte)0);
+        virtio_pci_set_status(commonPhys, (byte)VIRTIO_STATUS_ACKNOWLEDGE);
+        virtio_pci_set_status(commonPhys, (byte)(VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER));
+
+        int features = virtio_pci_get_features(commonPhys);
+        virtio_pci_set_features(commonPhys, features);
+
+        virtio_pci_set_status(commonPhys,
+            (byte)(VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK));
+
+        virtio_pci_select_queue(commonPhys, 0);
+        int qSize = virtio_pci_get_queue_size(commonPhys);
+        if (qSize < 1) qSize = 256;
+        if (qSize > 256) qSize = 256;
+
+        long descSize  = (long)qSize * 16;
+        long availSize = 4 + (long)qSize * 2 + 2;
+        long usedSize  = 4 + (long)qSize * 8 + 2;
+        long descAligned  = (descSize  + 4095) & ~4095;
+        long availAligned = (availSize + 4095) & ~4095;
+        long usedAligned  = (usedSize  + 4095) & ~4095;
+
+        long descPhys  = Memory.malloc((int)descAligned);
+        long availPhys = Memory.malloc((int)availAligned);
+        long usedPhys  = Memory.malloc((int)usedAligned);
+        long cmdbuf    = Memory.malloc(4096);
+        long respbuf   = Memory.malloc(4096);
+
+        int devSize = virtio_gpu_dev_size();
+        long devStruct = Memory.malloc(devSize + 15);
+        devStruct = (devStruct + 15) & ~15;
+
+        virtio_gpu_dev_init(devStruct, commonPhys, notifyPhys,
+                            devicePhys, cmdbuf, respbuf);
+        virtq_init(devStruct, descPhys, availPhys, usedPhys, qSize);
+
+        virtio_pci_set_queue(commonPhys, descPhys, availPhys, usedPhys);
+        virtio_pci_disable_interrupts(commonPhys);
+        virtio_pci_enable_queue(commonPhys);
+
+        virtio_pci_set_status(commonPhys,
+            (byte)(VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER |
+                   VIRTIO_STATUS_FEATURES_OK | VIRTIO_STATUS_DRIVER_OK));
+
+        int numScanouts = System.read32(devicePhys + 8);
+        long infoBuf = Memory.malloc(16 * 3 * 4);
+        virtio_gpu_get_display_info(devStruct, infoBuf);
+
+        screens = new IScreen[numScanouts];
+        for (int i = 0; i < numScanouts; i++) {
+            int w = (int) System.read32(infoBuf + (long)i * 12 + 4);
+            int h = (int) System.read32(infoBuf + (long)i * 12 + 8);
+            if (w == 0) w = 1024;
+            if (h == 0) h = 768;
+            screens[i] = new VirtioGpuScreen(devStruct, i, i + 1, w, h);
+        }
+    }
+}

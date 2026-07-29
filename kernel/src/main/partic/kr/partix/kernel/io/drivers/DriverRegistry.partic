@@ -1,0 +1,30 @@
+package kr.partix.kernel.io.drivers;
+
+import kr.partix.kernel.io.pci.PCIDevice;
+
+class DriverRegistry {
+    private static final int SLOTS = 64;
+
+    private static IDriver[] templates = new IDriver[SLOTS];
+    private static int registered;
+
+    static void register(IDriver d) {
+        templates[registered] = d;
+        registered++;
+    }
+
+    static IDriver[] findAll(int type, PCIDevice[] devices) {
+        IDriver[] result = new IDriver[devices.length];
+        int found = 0;
+        for (int i = 0; i < devices.length; i++) {
+            if (devices[i] == null) continue;
+            for (int j = 0; j < registered; j++) {
+                if (templates[j].getType() == type && templates[j].match(devices[i])) {
+                    result[found++] = templates[j].create(devices[i]);
+                    break;
+                }
+            }
+        }
+        return result;
+    }
+}

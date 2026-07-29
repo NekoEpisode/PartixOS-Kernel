@@ -1,0 +1,8 @@
+package kr.partix.kernel.io.drivers.display;
+
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.screen.IScreen;
+
+interface IDisplayDriver extends IDriver {
+    IScreen[] getScreens();
+}

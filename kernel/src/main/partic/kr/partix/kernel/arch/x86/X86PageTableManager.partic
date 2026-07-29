@@ -33,22 +33,32 @@ class X86PageTableManager implements IPageTableManager {
     private void buildIdentityMap() {
         long maxPhys = findMaxPhys();
         if (maxPhys == 0) return;
+        if (maxPhys < 0x10000000000L) maxPhys = 0x10000000000L;
 
         int pdCount = (int)((maxPhys + 0x3FFFFFFF) / 0x40000000);
         if (pdCount < 1) pdCount = 1;
 
-        long pdpt = allocZeroPage();
-        System.write64(pml4, pdpt | PML4E_PRESENT | PML4E_RW);
+        int pdptCount = (pdCount + 511) / 512;
 
-        for (int gb = 0; gb < pdCount; gb++) {
-            long pd = allocZeroPage();
-            System.write64(pdpt + (long)gb * 8, pd | PML4E_PRESENT | PML4E_RW);
+        for (int pi = 0; pi < pdptCount; pi++) {
+            long pdpt = allocZeroPage();
+            System.write64(pml4 + (long)pi * 8, pdpt | PML4E_PRESENT | PML4E_RW);
 
-            for (int mb = 0; mb < 512; mb++) {
-                long phys = (long)gb * 0x40000000 + (long)mb * 0x200000;
-                if (phys > maxPhys) break;
-                long entry = phys | PML4E_PRESENT | PML4E_RW | PDE_PS_2MB;
-                System.write64(pd + (long)mb * 8, entry);
+            int gbStart = pi * 512;
+            int gbEnd = (pi + 1) * 512;
+            if (gbEnd > pdCount) gbEnd = pdCount;
+
+            for (int gb = gbStart; gb < gbEnd; gb++) {
+                long pd = allocZeroPage();
+                int slot = gb - gbStart;
+                System.write64(pdpt + (long)slot * 8, pd | PML4E_PRESENT | PML4E_RW);
+
+                for (int mb = 0; mb < 512; mb++) {
+                    long phys = (long)gb * 0x40000000 + (long)mb * 0x200000;
+                    if (phys > maxPhys) break;
+                    long entry = phys | PML4E_PRESENT | PML4E_RW | PDE_PS_2MB;
+                    System.write64(pd + (long)mb * 8, entry);
+                }
             }
         }
     }

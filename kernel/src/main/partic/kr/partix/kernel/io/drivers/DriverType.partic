@@ -1,0 +1,9 @@
+package kr.partix.kernel.io.drivers;
+
+class DriverType {
+    static final int DISPLAY  = 1;
+    static final int NET      = 2;
+    static final int STORAGE  = 3;
+    static final int INPUT    = 4;
+    static final int AUDIO    = 5;
+}

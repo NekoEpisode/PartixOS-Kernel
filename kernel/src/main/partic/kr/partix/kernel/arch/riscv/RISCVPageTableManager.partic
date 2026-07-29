@@ -39,9 +39,11 @@ class RISCVPageTableManager implements IPageTableManager {
     private void buildIdentityMap() {
         long maxPhys = findMaxPhys();
         if (maxPhys == 0) return;
+        if (maxPhys < 0x8000000000L) maxPhys = 0x8000000000L;
 
         int pmdCount = (int)((maxPhys + 0x3FFFFFFF) / 0x40000000);
         if (pmdCount < 1) pmdCount = 1;
+        if (pmdCount > 512) pmdCount = 512;
 
         for (int gb = 0; gb < pmdCount; gb++) {
             long pmd = allocZeroPage();

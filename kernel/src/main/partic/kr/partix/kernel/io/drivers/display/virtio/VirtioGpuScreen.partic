@@ -1,0 +1,91 @@
+package kr.partix.kernel.io.drivers.display.virtio;
+
+import kr.partix.kernel.io.screen.IScreen;
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.core.memory.Memory;
+
+class VirtioGpuScreen implements IScreen {
+    private final long dev;
+    private final int scanoutId;
+    private final int resourceId;
+    private long width;
+    private long height;
+    private long fbPhys;
+
+    private extern void virtio_gpu_create_2d(long dev, int id, int format,
+                                             int width, int height);
+    private extern void virtio_gpu_attach_backing(long dev, int id,
+                                                  long phys, int size);
+    private extern void virtio_gpu_set_scanout(long dev, int scanout, int id,
+                                               int width, int height);
+    private extern void virtio_gpu_transfer_to_host_2d(long dev, int id,
+                                                       int x, int y,
+                                                       int width, int height);
+    private extern void virtio_gpu_flush(long dev, int id,
+                                         int x, int y, int width, int height);
+    private extern void virtio_gpu_resource_unref(long dev, int id);
+
+    VirtioGpuScreen(long devStruct, int scanoutId, int resourceId,
+                    int width, int height) {
+        this.dev = devStruct;
+        this.scanoutId = scanoutId;
+        this.resourceId = resourceId;
+        this.width = (long) width;
+        this.height = (long) height;
+
+        long fbSize = ((long)width * (long)height * 4 + 4095) & ~4095;
+        fbPhys = Memory.malloc((int)fbSize);
+
+        virtio_gpu_create_2d(dev, resourceId, 1, width, height);
+        virtio_gpu_attach_backing(dev, resourceId, fbPhys, (int)fbSize);
+        virtio_gpu_set_scanout(dev, scanoutId, resourceId, width, height);
+    }
+
+    long getWidth()  -> width
+    long getHeight() -> height
+    long getStride() -> width * 4
+    long getFramebufferSize() -> height * getStride()
+
+    int* getFramebuffer() -> (int*) fbPhys
+
+    void blt(int* src, long x, long y, long w, long h) {
+        if (fbPhys == 0 || w <= 0 || h <= 0) return;
+        if (src == null) {
+            flush(x, y, w, h);
+            return;
+        }
+
+        long stride = width * 4;
+        for (long row = 0; row < h; row++) {
+            for (long col = 0; col < w; col++) {
+                int pixel = src[(int)(row * w + col)];
+                long offset = ((y + row) * stride + (x + col)) * 4;
+                System.write32(fbPhys + offset, pixel);
+            }
+        }
+        flush(x, y, w, h);
+    }
+
+    void flush(long x, long y, long w, long h) {
+        virtio_gpu_transfer_to_host_2d(dev, resourceId, (int)x, (int)y,
+                                       (int)w, (int)h);
+        virtio_gpu_flush(dev, resourceId, (int)x, (int)y, (int)w, (int)h);
+    }
+
+    int setMode(long w, long h) {
+        virtio_gpu_resource_unref(dev, resourceId);
+        Memory.free(fbPhys);
+
+        this.width = w;
+        this.height = h;
+
+        virtio_gpu_create_2d(dev, resourceId, 1, (int)w, (int)h);
+
+        long fbSize = ((long)w * (long)h * 4 + 4095) & ~4095;
+        fbPhys = Memory.malloc((int)fbSize);
+        virtio_gpu_attach_backing(dev, resourceId, fbPhys, (int)fbSize);
+
+        virtio_gpu_set_scanout(dev, scanoutId, resourceId, (int)w, (int)h);
+        return 0;
+    }
+}

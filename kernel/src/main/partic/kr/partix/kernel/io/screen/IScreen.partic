@@ -1,10 +1,14 @@
 package kr.partix.kernel.io.screen;
 
 interface IScreen {
+    // Pixel format: BGRX (B8G8R8X8), little-endian int
+    // int pixel = 0x00RRGGBB, byte layout: [B,G,R,X]
     long getWidth();
     long getHeight();
-    long getStride();
+    long getStride();  // bytes per row
+    long getFramebufferSize();  // total bytes: height * stride
     int* getFramebuffer();
     void blt(int* src, long x, long y, long w, long h);
+    void flush(long x, long y, long w, long h);
     int setMode(long w, long h);
 }

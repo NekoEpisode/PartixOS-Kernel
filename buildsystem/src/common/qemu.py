@@ -242,20 +242,28 @@ def launch_qemu(run: QemuRunConfig, disk: Path, arch: str = "x86_64", extra: str
     while i < len(user_args):
         arg = user_args[i]
         if arg == "-nographic":
-            # remove any -serial flags from cmd
             cmd = [a for j, a in enumerate(cmd) if a not in ("-serial",)
                    and (j == 0 or cmd[j-1] != "-serial")]
 
-        if arg.startswith("-") and arg in cmd:
-            idx = cmd.index(arg)
-            if i + 1 < len(user_args) and not user_args[i + 1].startswith("-"):
-                cmd[idx + 1] = user_args[i + 1]
-                i += 2
+        if arg.startswith("-"):
+            if arg in cmd:
+                idx = cmd.index(arg)
+                if i + 1 < len(user_args) and not user_args[i + 1].startswith("-"):
+                    if idx + 1 < len(cmd) and not cmd[idx + 1].startswith("-"):
+                        cmd[idx + 1] = user_args[i + 1]
+                    else:
+                        cmd.insert(idx + 1, user_args[i + 1])
+                    i += 2
+                else:
+                    i += 1
             else:
-                i += 1
-        else:
-            if arg not in cmd:
                 cmd.append(arg)
+                if i + 1 < len(user_args) and not user_args[i + 1].startswith("-"):
+                    cmd.append(user_args[i + 1])
+                    i += 2
+                else:
+                    i += 1
+        else:
             i += 1
 
     print(f"\n  [QEMU] {' '.join(cmd)}")

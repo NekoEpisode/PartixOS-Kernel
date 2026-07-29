@@ -1,7 +1,7 @@
 #include <stdint.h>
 
 static uint64_t heap_next = 0x81000000;
-static uint64_t heap_top  = 0x81100000;
+static uint64_t heap_top  = 0x82000000;
 
 uint64_t kr_malloc(uint64_t size) {
     size = (size + 15) & ~15ULL;

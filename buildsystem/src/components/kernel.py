@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
 KERNEL = Component(
     name="kernel",
     desc="Partix kernel (Partic -> ELF)",
-    depends=["hal"],
+    depends=["hal", "drivers"],
 )
 ComponentRegistry.register(KERNEL)
 

@@ -15,12 +15,15 @@ from .x86_64.toolchain import ClangToolchain
 from .components import bootloader as _  # noqa: F401
 from .components import hal as _        # noqa: F401
 from .components import kernel as _     # noqa: F401
+from .components import drivers as _    # noqa: F401
 from .x86_64 import builder as _          # noqa: F401
 from .x86_64 import hal_builder as _      # noqa: F401
 from .x86_64 import kernel_builder as _    # noqa: F401
+from .x86_64 import drivers_builder as _  # noqa: F401
 from .riscv64 import hal_builder as _     # noqa: F401
 from .riscv64 import kernel_builder as _   # noqa: F401
 from .riscv64 import bootloader_builder as _  # noqa: F401
+from .riscv64 import drivers_builder as _ # noqa: F401
 
 
 def _get_toolchain(arch: str, clang_override: str = "", linker_override: str = ""):

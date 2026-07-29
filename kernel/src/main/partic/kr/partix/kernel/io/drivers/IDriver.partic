@@ -1,0 +1,9 @@
+package kr.partix.kernel.io.drivers;
+
+import kr.partix.kernel.io.pci.PCIDevice;
+
+interface IDriver {
+    int getType();
+    boolean match(PCIDevice device);
+    IDriver create(PCIDevice device);
+}

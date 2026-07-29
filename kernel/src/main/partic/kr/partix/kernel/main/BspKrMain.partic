@@ -20,6 +20,11 @@ import kr.partix.kernel.event.events.TestEvent;
 import kr.partix.kernel.interrupt.Interrupt;
 import kr.partix.kernel.memory.MemoryMap;
 import kr.partix.kernel.paging.IPageTableManager;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.DriverRegistry;
+import kr.partix.kernel.io.drivers.display.virtio.VirtioGpuDriverTemplate;
+import kr.partix.kernel.io.screen.IScreen;
+import kr.partix.kernel.io.screen.ScreenRegistry;
 
 class BspKrMain {
     static IArch arch;
@@ -50,7 +55,10 @@ class BspKrMain {
             strBuilder.dispose();
             Memory.free(builded1);
 
+            DriverRegistry.register(new VirtioGpuDriverTemplate());
+
             PCIDevice[] allDevices = PCI.enumerate();
+            ScreenRegistry.init(allDevices);
             int count = PCI.getDeviceCount();
             strBuilder = new StrBuilder();
             strBuilder.append("Scanned result:\n");
@@ -83,6 +91,20 @@ class BspKrMain {
             }
 
             EventBus.call(new TestEvent(42));
+
+            // B8G8R8X8 — fill all screens white
+            int screenTotal = ScreenRegistry.getScreenCount();
+            for (int si = 0; si < screenTotal; si++) {
+                IScreen screen = ScreenRegistry.getScreen(si);
+                int* fb = screen.getFramebuffer();
+                for (long l = 0; l < screen.getFramebufferSize() / 4; l++) {
+                    fb[(int)l] = 0x00FFFFFF;
+                }
+                long strideInts = screen.getStride() / 4;
+                int center = (int)((screen.getHeight() / 2) * strideInts + (screen.getWidth() / 2));
+                fb[center] = 0x00FF0000;
+                screen.flush(0, 0, screen.getWidth(), screen.getHeight());
+            }
 
             while (true) {}
         } catch (Exception e) {
