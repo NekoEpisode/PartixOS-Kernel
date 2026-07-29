@@ -16,6 +16,11 @@ class System {
     extern long read64(long addr);
     extern void halt();
     extern void enableInterrupts();
+    extern void stopInterrupts();
 
     static IArch getArch() -> ArchRegistry.get(archId)
+
+    static void panic() {
+        getArch().panic();
+    }
 }

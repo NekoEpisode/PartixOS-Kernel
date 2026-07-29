@@ -1,0 +1,14 @@
+package kr.partix.kernel.utils;
+
+class Point {
+    private final long x;
+    private final long y;
+
+    Point(long x, long y) {
+        this.x = x;
+        this.y = y;
+    }
+    
+    long getX() -> x
+    long getY() -> y
+}

@@ -8,6 +8,7 @@ import kr.partix.kernel.interrupt.IInterruptController;
 import kr.partix.kernel.arch.x86.X86InterruptController;
 import kr.partix.kernel.paging.IPageTableManager;
 import kr.partix.kernel.arch.x86.X86PageTableManager;
+import kr.partix.kernel.sys.System;
 
 class X86Arch implements IArch {
     private final X86UART uart;
@@ -32,4 +33,13 @@ class X86Arch implements IArch {
     IPCIIO getPciIo() -> pciio
     IInterruptController getInterruptController() -> ic
     IPageTableManager getPageTableManager() -> ptm
+
+    void panic() {
+        uart.println("KERNEL PANIC!");
+        while (true) {
+            System.stopInterrupts();
+            System.halt();
+        }
+        // TODO: 输出调试信息，保存内核堆栈，寄存器
+    }
 }

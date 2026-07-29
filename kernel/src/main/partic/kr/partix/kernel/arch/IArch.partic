@@ -13,4 +13,5 @@ interface IArch {
     IPCIIO getPciIo();
     IInterruptController getInterruptController();
     IPageTableManager getPageTableManager();
+    void panic();
 }

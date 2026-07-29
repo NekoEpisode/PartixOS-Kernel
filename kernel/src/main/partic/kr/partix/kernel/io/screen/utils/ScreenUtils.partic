@@ -1,0 +1,52 @@
+package kr.partix.kernel.io.screen.utils;
+
+import kr.partix.kernel.io.screen.IScreen;
+import kr.partix.kernel.utils.Point;
+
+class ScreenUtils {
+    static Point getCenter(IScreen screen) -> new Point(screen.getWidth() >> 1, screen.getHeight() >> 1)
+
+    static void setPixel(IScreen screen, long x, long y, RGB color) {
+        int* fb = screen.getFramebuffer();
+        if (fb == null) return;
+
+        int pixel = ((int)(color.getB() & 0xFF))
+                  | ((int)(color.getG() & 0xFF) << 8)
+                  | ((int)(color.getR() & 0xFF) << 16);
+
+        long offset = y * (screen.getStride() / 4) + x;
+        fb[(int)offset] = pixel;
+    }
+
+    static void setPixel(IScreen screen, Point point, RGB color) {
+        setPixel(screen, point.getX(), point.getY(), color);
+    }
+
+    static void fill(IScreen screen, long x, long y, long w, long h,
+                     RGB color) {
+        int * fb = screen.getFramebuffer();
+        if (fb == null) return;
+
+        int pixel = ((int)(color.getB() & 0xFF)) | ((int)(color.getG() & 0xFF) << 8) | ((int)(color.getR() & 0xFF) << 16);
+
+        long strideInts = screen.getStride() / 4;
+        for (long row = 0; row < h; row++) {
+            for (long col = 0; col < w; col++) {
+                long offset = (y + row) * strideInts + (x + col);
+                fb[(int)offset] = pixel;
+            }
+        }
+    }
+
+    static void fill(IScreen screen, Point point, long w, long h, RGB color) {
+        fill(screen, point.getX(), point.getY(), w, h, color);
+    }
+
+    static void fillRange(IScreen screen, long x, long y,
+                          long x1, long y1, RGB color) {
+        long w = x1 - x;
+        long h = y1 - y;
+        if (w <= 0 || h <= 0) return;
+        fill(screen, x, y, w, h, color);
+    }
+}

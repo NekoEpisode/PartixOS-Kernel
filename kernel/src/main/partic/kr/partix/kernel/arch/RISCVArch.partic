@@ -8,6 +8,7 @@ import kr.partix.kernel.interrupt.IInterruptController;
 import kr.partix.kernel.arch.riscv.RISCVInterruptController;
 import kr.partix.kernel.paging.IPageTableManager;
 import kr.partix.kernel.arch.riscv.RISCVPageTableManager;
+import kr.partix.kernel.sys.System;
 
 class RISCVArch implements IArch {
     private final IUART uart;
@@ -35,4 +36,13 @@ class RISCVArch implements IArch {
     IPCIIO getPciIo() -> pciIo
     IInterruptController getInterruptController() -> ic
     IPageTableManager getPageTableManager() -> ptm
+
+    void panic() {
+        uart.println("KERNEL PANIC!");
+        while (true) {
+            System.stopInterrupts();
+            System.halt();
+        }
+        // TODO: 输出调试信息，保存内核堆栈，寄存器
+    }
 }

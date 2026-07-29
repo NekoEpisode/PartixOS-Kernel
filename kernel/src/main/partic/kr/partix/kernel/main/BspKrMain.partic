@@ -1,13 +1,9 @@
 package kr.partix.kernel.main;
 
-import kr.partix.kernel.sys.System;
-import kr.partix.kernel.io.UART;
-
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
-import lang.partic.stdlib.core.utils.string.CoreStrUtils;
-import lang.partic.stdlib.core.exception.exception.Exception;
 import lang.partic.stdlib.core.memory.Memory;
+import lang.partic.stdlib.core.exception.exception.Exception;
 import kr.partix.kernel.arch.ArchRegistry;
 import kr.partix.kernel.arch.IArch;
 import kr.partix.kernel.io.pci.PCIDevice;
@@ -17,14 +13,15 @@ import kr.partix.kernel.event.EventId;
 import kr.partix.kernel.event.eventlisteners.TestEventListener;
 import kr.partix.kernel.event.eventlisteners.UnknownInterruptEventListener;
 import kr.partix.kernel.event.events.TestEvent;
-import kr.partix.kernel.interrupt.Interrupt;
 import kr.partix.kernel.memory.MemoryMap;
-import kr.partix.kernel.paging.IPageTableManager;
-import kr.partix.kernel.io.drivers.DriverType;
 import kr.partix.kernel.io.drivers.DriverRegistry;
 import kr.partix.kernel.io.drivers.display.virtio.VirtioGpuDriverTemplate;
 import kr.partix.kernel.io.screen.IScreen;
 import kr.partix.kernel.io.screen.ScreenRegistry;
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.io.screen.utils.ScreenUtils;
+import kr.partix.kernel.io.screen.utils.RGB;
+import kr.partix.kernel.utils.Point;
 
 class BspKrMain {
     static IArch arch;
@@ -83,28 +80,23 @@ class BspKrMain {
                 strBuilder.append(" prog=");
                 strBuilder.append(StrUtils.toHex(device.progIF));
                 strBuilder.append("\n");
-
                 str builded = strBuilder.build();
                 arch.getUart().print(builded);
                 strBuilder.dispose();
                 Memory.free(builded);
             }
 
-            EventBus.call(new TestEvent(42));
+            TestEvent event = new TestEvent(42);
+            EventBus.call(event);
+            Memory.free((long) event);
 
-            // B8G8R8X8 — fill all screens white
-            int screenTotal = ScreenRegistry.getScreenCount();
-            for (int si = 0; si < screenTotal; si++) {
-                IScreen screen = ScreenRegistry.getScreen(si);
-                int* fb = screen.getFramebuffer();
-                for (long l = 0; l < screen.getFramebufferSize() / 4; l++) {
-                    fb[(int)l] = 0x00FFFFFF;
-                }
-                long strideInts = screen.getStride() / 4;
-                int center = (int)((screen.getHeight() / 2) * strideInts + (screen.getWidth() / 2));
-                fb[center] = 0x00FF0000;
-                screen.flush(0, 0, screen.getWidth(), screen.getHeight());
-            }
+            IScreen screen = ScreenRegistry.getPrimary();
+            Point point = ScreenUtils.getCenter(screen);
+            RGB rgb = new RGB((byte) 255, (byte) 0, (byte) 0);
+            ScreenUtils.fill(screen, point.getX(), point.getY(), 5, 5, rgb);
+            screen.flush(0, 0, screen.getWidth(), screen.getHeight());
+            Memory.free((long) rgb);
+            Memory.free((long) point);
 
             while (true) {}
         } catch (Exception e) {

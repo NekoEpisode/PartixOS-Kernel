@@ -1,0 +1,21 @@
+package kr.partix.kernel.io.screen.utils;
+
+class RGB {
+    private byte r;
+    private byte g;
+    private byte b;
+
+    RGB(byte r, byte g, byte b) {
+        this.r = r;
+        this.g = g;
+        this.b = b;
+    }
+
+    byte getR() -> r
+    byte getG() -> g
+    byte getB() -> b
+
+    void setR(byte r) { this.r = r; }
+    void setG(byte g) { this.g = g; }
+    void setB(byte b) { this.b = b; }
+}

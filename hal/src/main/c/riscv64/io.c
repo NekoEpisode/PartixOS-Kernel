@@ -5,6 +5,11 @@ void enableInterrupts() {
     __asm__ volatile("csrsi sstatus, 0x2");
 }
 
+void stopInterrupts() {
+    __asm__ volatile("csrci sie, %0" :: "i"(1 << 1));
+    __asm__ volatile("csrci sstatus, 0x2");
+}
+
 void write8(uint64_t addr, uint8_t data) {
     *(volatile uint8_t*)addr = data;
 }

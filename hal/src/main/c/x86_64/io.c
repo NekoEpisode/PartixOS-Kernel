@@ -70,3 +70,7 @@ void halt() {
 void enableInterrupts() {
     __asm__ volatile ("sti");
 }
+
+void stopInterrupts() {
+     __asm__ volatile ("cli");
+}
