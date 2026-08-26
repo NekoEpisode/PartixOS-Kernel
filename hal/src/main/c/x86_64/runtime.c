@@ -1,5 +1,5 @@
 #include <stdint.h>
-#include "timer_config.h"
+#include "../runtime/timer_config.h"
 
 static uint64_t heap_next = 0x2000000;
 static uint64_t heap_top  = 0x2800000;
