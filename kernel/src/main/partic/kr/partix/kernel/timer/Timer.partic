@@ -4,12 +4,18 @@ package kr.partix.kernel.timer;
  * Timer — arch-agnostic facade over the HAL timer drivers.
  *
  * Both x86_64 (Local APIC timer with PIT auto-fallback) and RISC-V
- * (SBI TIME driven CLINT timer) expose the same five extern symbols,
+ * (SBI TIME driven CLINT timer) expose the same extern symbols,
  * so no per-arch stubs are needed.
  *
- * Tick rate is 100 Hz (10 ms) — matching sys_now()'s g_tick * 10 ms.
+ * TICK_HZ is the single source of truth for the tick rate. The C side
+ * references the same constant through its mangled symbol
+ * (kr_partix_kernel_timer_Timer_s_TICK_HZ) via hal/.../runtime/timer_config.h,
+ * so changing the frequency only touches this one declaration.
  */
 class Timer {
+    /** Timer tick frequency in Hz (100 = one tick per 10 ms). */
+    static final long TICK_HZ = 100;
+
     private extern int timer_init();
     private extern void timer_tick();
     private extern void timer_eoi();

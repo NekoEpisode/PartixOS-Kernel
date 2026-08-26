@@ -10,7 +10,7 @@
 // with any SBI-compliant M-mode firmware (OpenSBI, etc.).
 //
 // One-shot semantics: each tick re-arms the next deadline
-// (mtime + timebase/100) so we run at 100 Hz.
+// (mtime + timebase/TIMER_TICK_HZ) so we run at TIMER_TICK_HZ.
 //
 // Exposed uniform API (also implemented by x86_64/timer.c):
 //   int  timer_init()          - program the timer; 0 on success, negative on error
@@ -22,6 +22,7 @@
 //   void timer_clear_ssip()    - clear supervisor software interrupt pending
 
 #include <stdint.h>
+#include "../runtime/timer_config.h"
 
 extern volatile unsigned long g_tick;
 
@@ -47,7 +48,7 @@ static inline uint64_t read_time(void) {
 }
 
 static void set_next_deadline(void) {
-    uint64_t next = read_time() + timebase / 100;
+    uint64_t next = read_time() + timebase / TIMER_TICK_HZ;
 
     // Modern SBI v0.2+ TIME extension first, legacy SBI v0.1 fallback.
     last_sbi_error = sbi_set_timer(next);

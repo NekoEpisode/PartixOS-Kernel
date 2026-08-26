@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "timer_config.h"
 
 static uint64_t heap_next = 0x2000000;
 static uint64_t heap_top  = 0x2800000;
@@ -70,7 +71,7 @@ int lwip_rand(void) {
 
 unsigned long sys_now(void) {
     extern volatile unsigned long g_tick;
-    return g_tick * 10;
+    return g_tick * TIMER_TICK_MS;
 }
 
 unsigned int sys_arch_protect(void) { return 0; }

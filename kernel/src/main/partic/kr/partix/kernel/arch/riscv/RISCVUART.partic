@@ -19,7 +19,7 @@ class RISCVUART implements IUART {
         // Wait for the transmitter to be ready (LSR bit5 = THRE).
         // Timeout (1 s) guards against a broken UART hanging the kernel;
         // on timeout the byte is dropped. Interrupts keep ticking meanwhile.
-        long deadline = Timer.getTicks() + 100;
+        long deadline = Timer.getTicks() + Timer.TICK_HZ;
         while ((System.read8(addr + 0x05) & 0x20) == 0) {
             if (Timer.getTicks() > deadline) return;
         }

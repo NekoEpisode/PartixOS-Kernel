@@ -4,8 +4,8 @@
 // clock. We calibrate its counting rate against PIT channel 2 (1.193182 MHz,
 // guaranteed to exist on any PC) so the code works on QEMU and real hardware
 // alike. If the Local APIC cannot be enabled or calibration yields an absurd
-// result, we fall back to PIT channel 0 (IRQ0, ~100 Hz) — the classic x86
-// timer that always works.
+// result, we fall back to PIT channel 0 (IRQ0, TIMER_TICK_HZ) — the classic
+// x86 timer that always works.
 //
 // Exposed uniform API (also implemented by riscv64/timer.c):
 //   int  timer_init()   - program the timer; 0 on success, negative on error
@@ -14,9 +14,11 @@
 //   long timer_ticks()  - current tick counter (g_tick)
 //   int  timer_vector() - IDT vector the timer delivers on (-1 if none)
 //
-// g_tick increments at 100 Hz; sys_now() already derives ms as g_tick * 10.
+// g_tick increments at TIMER_TICK_HZ (see runtime/timer_config.h); sys_now()
+// derives ms as g_tick * TIMER_TICK_MS.
 
 #include "include/stdint.h"
+#include "../runtime/timer_config.h"
 
 extern volatile unsigned long g_tick;
 
@@ -114,8 +116,8 @@ static void lapic_timer_setup(void) {
     lapic_write(LAPIC_TIMER_DIV, LAPIC_DIV16);
 }
 
-// Returns counts (at /16) per 10 ms, or 0 if calibration failed.
-static uint32_t lapic_calibrate_per10ms(void) {
+// Returns counts (at /16) per timer tick (1s / TIMER_TICK_HZ), or 0 if failed.
+static uint32_t lapic_calibrate_per_tick(void) {
     // Arm the LAPIC timer one-shot with the max count.
     lapic_write(LAPIC_LVT_TIMER, LAPIC_LVT_MASK | LAPIC_TIMER_VECTOR);
     lapic_write(LAPIC_TIMER_INITCNT, 0xFFFFFFFFu);
@@ -137,23 +139,24 @@ static uint32_t lapic_calibrate_per10ms(void) {
     uint32_t cur = lapic_read(LAPIC_TIMER_CURCNT);
     lapic_write(LAPIC_TIMER_INITCNT, 0);
 
-    uint32_t elapsed = 0xFFFFFFFFu - cur; // counts over 54,933.3 us
-    uint64_t per10ms = ((uint64_t)elapsed * 10000) / 54933;
-    if (per10ms == 0 || per10ms > 0xFFFFFF00ULL) return 0;
-    return (uint32_t)per10ms;
+    uint32_t elapsed = 0xFFFFFFFFu - cur; // counts over 54,933 us window
+    uint64_t perTick = ((uint64_t)elapsed * 1000000)
+                       / (54933ULL * TIMER_TICK_HZ);
+    if (perTick == 0 || perTick > 0xFFFFFF00ULL) return 0;
+    return (uint32_t)perTick;
 }
 
-static void lapic_timer_start(uint32_t per10ms) {
+static void lapic_timer_start(uint32_t perTick) {
     lapic_write(LAPIC_LVT_TIMER, LAPIC_TIMER_VECTOR | LAPIC_LVT_PERIODIC);
-    lapic_write(LAPIC_TIMER_INITCNT, per10ms);
+    lapic_write(LAPIC_TIMER_INITCNT, perTick);
     active_vector = LAPIC_TIMER_VECTOR;
     using_pit = 0;
 }
 
-// ── PIT fallback (~100 Hz, IRQ0) ───────────────────────
+// ── PIT fallback (TIMER_TICK_HZ, IRQ0) ────────────────────
 static void pit_timer_start(void) {
     outb(PIT_CMD, PIT_CH0_RATE);
-    uint16_t cnt = (uint16_t)(PIT_FREQ / 100);   // 11932 -> 100.0 Hz
+    uint16_t cnt = (uint16_t)(PIT_FREQ / TIMER_TICK_HZ);
     outb(PIT_CH0, cnt & 0xFF);
     outb(PIT_CH0, cnt >> 8);
     // Unmask IRQ0 on the master PIC so the PIT interrupt can reach the CPU.
@@ -170,8 +173,8 @@ int timer_init(void) {
     }
 
     lapic_timer_setup();
-    uint32_t per10ms = lapic_calibrate_per10ms();
-    if (!per10ms) {
+    uint32_t perTick = lapic_calibrate_per_tick();
+    if (!perTick) {
         pit_timer_start();
         return 0;
     }
@@ -179,7 +182,7 @@ int timer_init(void) {
     // LAPIC timer active: silence PIT channel 0 (IRQ0 masked by the PIC init,
     // enforce it here so a stray PIT can never deliver a second tick stream).
     outb(0x21, inb(0x21) | 0x01u);
-    lapic_timer_start(per10ms);
+    lapic_timer_start(perTick);
     return 0;
 }
 
