@@ -5,6 +5,7 @@ import kr.partix.kernel.interrupt.IInterruptController;
 import kr.partix.kernel.interrupt.IInterruptHandler;
 import kr.partix.kernel.interrupt.IInterruptData;
 import kr.partix.kernel.interrupt.Interrupt;
+import kr.partix.kernel.timer.Timer;
 
 class X86InterruptController implements IInterruptController {
     private static final int PIC1_CMD  = 0x20;
@@ -32,6 +33,10 @@ class X86InterruptController implements IInterruptController {
         pic2Mask = 0xFF;
         System.write8(PIC1_DATA, (byte) pic1Mask);
         System.write8(PIC2_DATA, (byte) pic2Mask);
+
+        // Local APIC timer (with automatic PIT fallback). The HAL keeps IRQ0
+        // masked in APIC mode and unmasked when it falls back to PIT.
+        Timer.init();
 
         System.enableInterrupts();
     }
@@ -69,6 +74,10 @@ class X86InterruptController implements IInterruptController {
     }
 
     void eoi(int vector) {
+        if (vector == Timer.getVector()) {
+            Timer.eoi();
+            return;
+        }
         int irq = vector - IRQ_BASE;
         if (irq >= 0 && irq < 16) {
             System.write8(PIC1_CMD, (byte) 0x20);
@@ -76,7 +85,17 @@ class X86InterruptController implements IInterruptController {
         }
     }
 
-    void dispatch(int vector, long epc, long sp, long frame) {
+    void dispatch(long cause, long epc, long sp, long frame) {
+        int vector = (int) cause;
+
+        if (vector == Timer.getVector()) {
+            // Timer interrupt — bump g_tick and notify via TimerEvent.
+            Timer.tick();
+            Interrupt.fireTimerEvent(epc, sp);
+            Timer.eoi();
+            return;
+        }
+
         IInterruptHandler h = handlers[vector];
         IInterruptData data = null;
         if (h != null) h.handle(vector, data);

@@ -313,7 +313,7 @@ isr_common:
     # rcx = frame = pointer to saved regs
     movq %rsp, %rcx
 
-    call kr_partix_kernel_interrupt_InterruptBridge_dispatch__IJJJV
+    call kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJV
 
     popq %r15
     popq %r14

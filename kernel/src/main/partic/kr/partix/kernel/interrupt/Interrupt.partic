@@ -3,10 +3,22 @@ package kr.partix.kernel.interrupt;
 import kr.partix.kernel.event.EventBus;
 import kr.partix.kernel.event.EventId;
 import kr.partix.kernel.event.events.InterruptEvent;
+import kr.partix.kernel.event.events.TimerEvent;
 import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.timer.Timer;
+import lang.partic.stdlib.core.memory.Memory;
 
 class Interrupt {
     static void fire(int vector, long epc, long sp, IInterruptData data) {
-        EventBus.call(new InterruptEvent(vector, epc, sp, data));
+        InterruptEvent e = new InterruptEvent(vector, epc, sp, data);
+        EventBus.call(e);
+        Memory.free((long) e);   // EventBus.call is synchronous; nobody retains it
+    }
+
+    /** Timer ticks get their own event so generic interrupt listeners stay quiet. */
+    static void fireTimerEvent(long epc, long sp) {
+        TimerEvent e = new TimerEvent(Timer.getTicks(), epc, sp);
+        EventBus.call(e);
+        Memory.free((long) e);
     }
 }

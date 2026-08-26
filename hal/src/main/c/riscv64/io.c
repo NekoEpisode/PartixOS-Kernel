@@ -1,12 +1,15 @@
 #include <stdint.h>
 
 void enableInterrupts() {
-    __asm__ volatile("csrw sie, %0" :: "r"(0x202));
+    // STIE | SEIE. Deliberately no SSIE: the kernel has no IPI source yet,
+    // and an inherited/leftover SSIP would otherwise trap forever.
+    __asm__ volatile("csrw sie, %0" :: "r"(0x220));
     __asm__ volatile("csrsi sstatus, 0x2");
 }
 
 void stopInterrupts() {
-    __asm__ volatile("csrci sie, %0" :: "i"(1 << 1));
+    // Disable all supervisor interrupt sources, including the timer.
+    __asm__ volatile("csrw sie, zero");
     __asm__ volatile("csrci sstatus, 0x2");
 }
 

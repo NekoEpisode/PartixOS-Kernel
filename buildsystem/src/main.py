@@ -92,14 +92,20 @@ def cmd_build(args: argparse.Namespace) -> int:
     comp = ComponentRegistry.get(args.component)
     deps = {}
     for dep in comp.depends:
-        from .x86_64.hal_builder import X86_64HalBuilder
+        # Pick the right builder per dependency (hal -> hal builder, etc.).
+        # The old code always used X86_64HalBuilder, which duplicated the hal
+        # objects into every dependency slot and broke the kernel link with
+        # "duplicate symbol" errors.
         toolchain = _get_toolchain(args.target, args.clang, args.linker)
         target_cls = TargetRegistry.get(args.target)
         target = target_cls(toolchain)
-        hal_builder = X86_64HalBuilder(target=target, build_root=PurePath(args.build_root))
-        if hasattr(hal_builder, '_debug'):
-            hal_builder._debug = args.g
-        deps[dep] = hal_builder.build()
+        builder_cls = BuilderRegistry.get(args.target, dep)
+        builder = builder_cls(target=target, build_root=PurePath(args.build_root))
+        if hasattr(builder, '_debug'):
+            builder._debug = args.g
+        if hasattr(builder, '_show_stderr'):
+            builder._show_stderr = args.show_partic_compiler_err
+        deps[dep] = builder.build()
 
     _build_component(args.component, args, deps)
     return 0

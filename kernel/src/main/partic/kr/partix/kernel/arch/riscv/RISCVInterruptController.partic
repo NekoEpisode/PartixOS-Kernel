@@ -5,9 +5,22 @@ import kr.partix.kernel.interrupt.IInterruptController;
 import kr.partix.kernel.interrupt.IInterruptHandler;
 import kr.partix.kernel.interrupt.IInterruptData;
 import kr.partix.kernel.interrupt.Interrupt;
+import kr.partix.kernel.timer.Timer;
 
 class RISCVInterruptController implements IInterruptController {
     private static long plicBase;
+
+    // PLIC context 1 = hart0 S-mode (kernel runs in S-mode over OpenSBI).
+    private static final long PLIC_CTX_ENABLE_BASE = 0x2080;
+    private static final long PLIC_CTX_THRESHOLD   = 0x201000;
+    private static final long PLIC_CTX_CLAIM       = 0x201004;
+
+    // scause decoding: bit 63 marks an interrupt; low bits give the code.
+    private static final long SCAUSE_INTERRUPT = 0x8000000000000000L;
+    private static final long SCAUSE_CODE      = 0x7FFFFFFFFFFFFFFFL;
+    private static final long CAUSE_SSI = 1;   // supervisor software interrupt
+    private static final long CAUSE_STI = 5;   // supervisor timer interrupt
+    private static final long CAUSE_SEI = 7;   // supervisor external interrupt
 
     private final IInterruptHandler[] handlers = new IInterruptHandler[256];
 
@@ -18,6 +31,10 @@ class RISCVInterruptController implements IInterruptController {
     void init() {
         plicBase = fdt_get_plic_base();
         ensurePlic();
+        // UEFI/OpenSBI may leave a pending supervisor software interrupt;
+        // clear it before interrupts open so it cannot fire once sie.SSIE is on.
+        Timer.clearSsi();
+        Timer.init();
         System.enableInterrupts();
     }
 
@@ -49,21 +66,50 @@ class RISCVInterruptController implements IInterruptController {
     }
 
     void eoi(int vector) {
-        System.write32(plicBase + 0x200004L, vector);
+        System.write32(plicBase + PLIC_CTX_CLAIM, vector);
     }
 
-    void dispatch(int cause, long epc, long sp, long frame) {
-        int vector = (int) cause;
+    void dispatch(long cause, long epc, long sp, long frame) {
+        boolean isInterrupt = (cause & SCAUSE_INTERRUPT) != 0;
+        long code = cause & SCAUSE_CODE;
 
+        if (isInterrupt) {
+            if (code == CAUSE_STI) {
+                // Supervisor timer interrupt (ACLINT/CLINT via SBI TIME).
+                Timer.tick();
+                Interrupt.fireTimerEvent(epc, sp);
+                Timer.eoi();
+                return;
+            }
+            if (code == CAUSE_SEI) {
+                // Supervisor external interrupt: claim the PLIC source.
+                int irq = System.read32(plicBase + PLIC_CTX_CLAIM);
+                IInterruptHandler h = handlers[irq];
+                if (h != null) h.handle(irq, null);
+                Interrupt.fire(irq, epc, sp, null);
+                System.write32(plicBase + PLIC_CTX_CLAIM, irq);
+                return;
+            }
+            if (code == CAUSE_SSI) {
+                // Supervisor software interrupt (IPI). No sender is wired up
+                // yet; clear the pending bit and ignore so it cannot storm.
+                Timer.clearSsi();
+                return;
+            }
+            // Unknown interrupt cause — report it.
+            Interrupt.fire((int) code, epc, sp, null);
+            return;
+        }
+
+        // Synchronous exception — report with the exception code as vector.
+        int vector = (int) code;
         IInterruptHandler h = handlers[vector];
-        IInterruptData data = null;
-        if (h != null) h.handle(vector, data);
-        Interrupt.fire(vector, epc, sp, data);
-        eoi(vector);
+        if (h != null) h.handle(vector, null);
+        Interrupt.fire(vector, epc, sp, null);
     }
 
     private static void writeEnable(long src, boolean on) {
-        long offset = 0x2000 + (src / 32) * 4;
+        long offset = PLIC_CTX_ENABLE_BASE + (src / 32) * 4;
         int bit = (int)(src % 32);
         int val = System.read32(plicBase + offset);
         if (on) val |= (1 << bit);
@@ -75,6 +121,6 @@ class RISCVInterruptController implements IInterruptController {
         System.write32(plicBase + src * 4, prio);
     }
     private static void writeThreshold(int thresh) {
-        System.write32(plicBase + 0x200000L, thresh);
+        System.write32(plicBase + PLIC_CTX_THRESHOLD, thresh);
     }
 }

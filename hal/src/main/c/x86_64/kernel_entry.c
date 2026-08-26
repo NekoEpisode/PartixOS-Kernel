@@ -17,9 +17,9 @@ typedef struct {
 } BootInfo;
 
 // Called from idt.c default_handler — bridges interrupt to Partic
-// Symbol: kr_partix_kernel_interrupt_InterruptBridge_dispatch__IJJJV
-extern void kr_partix_kernel_interrupt_InterruptBridge_dispatch__IJJJV(
-    int cause, uint64_t epc, uint64_t sp, uint64_t frame);
+// Symbol: kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJV
+extern void kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJV(
+    int64_t cause, uint64_t epc, uint64_t sp, uint64_t frame);
 
 void kernel_entry(BootInfo* info) {
     gop_framebuffer = info->framebuffer;

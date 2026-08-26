@@ -11,6 +11,7 @@ import kr.partix.kernel.io.pci.PCI;
 import kr.partix.kernel.event.EventBus;
 import kr.partix.kernel.event.EventId;
 import kr.partix.kernel.event.eventlisteners.TestEventListener;
+import kr.partix.kernel.event.eventlisteners.TimerEventListener;
 import kr.partix.kernel.event.eventlisteners.UnknownInterruptEventListener;
 import kr.partix.kernel.event.events.TestEvent;
 import kr.partix.kernel.memory.MemoryMap;
@@ -35,6 +36,7 @@ class BspKrMain {
             EventBus.init();
             EventBus.registerEventListener(EventId.INTERRUPT_EVENT, new UnknownInterruptEventListener());
             EventBus.registerEventListener(EventId.TEST_EVENT, new TestEventListener());
+            EventBus.registerEventListener(EventId.TIMER_EVENT, new TimerEventListener());
 
             MemoryMap.init();
             arch.getPageTableManager().init();

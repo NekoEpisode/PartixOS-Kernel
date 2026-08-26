@@ -8,12 +8,14 @@ static uint32_t       fdt_struct_size;
 static uint64_t fdt_uart_base;
 static uint64_t fdt_plic_base;
 static uint64_t fdt_pcie_base;
+static uint64_t fdt_timebase_freq;
 
 enum { DEV_NONE = 0, DEV_UART, DEV_PLIC, DEV_PCIE };
 static uint8_t pending_dev[64];
 static uint64_t pending_reg[64];
 static int      pending_ac[64];
 static int      pending_sc[64];
+static char     node_name[64][33];
 
 static inline uint32_t be32(const uint8_t *p) {
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) |
@@ -27,6 +29,13 @@ static inline uint64_t be64(const uint8_t *p) {
 static int str_eq(const char *a, const char *b) {
     while (*a && *b && *a == *b) { a++; b++; }
     return *a == *b;
+}
+
+/* Node name is "cpus" (possibly "cpus@..."/"cpus:..."). */
+static int name_is_cpus(const char *n) {
+    if (n[0] != 'c' || n[1] != 'p' || n[2] != 'u' || n[3] != 's') return 0;
+    char c = n[4];
+    return c == 0 || c == '@' || c == ':';
 }
 
 static int match_compatible(const uint8_t *data, uint32_t len,
@@ -54,11 +63,13 @@ void fdt_init(void *fdt_ptr) {
     fdt_uart_base = 0;
     fdt_plic_base = 0;
     fdt_pcie_base = 0;
+    fdt_timebase_freq = 0;
     for (int i = 0; i < 64; i++) {
         pending_dev[i] = DEV_NONE;
         pending_reg[i] = 0;
         pending_ac[i] = 2;
         pending_sc[i] = 2;
+        node_name[i][0] = 0;
     }
 
     if (!fdt_ptr) return;
@@ -86,6 +97,9 @@ void fdt_init(void *fdt_ptr) {
                 pending_reg[depth] = 0;
                 pending_ac[depth] = pending_ac[depth - 1];
                 pending_sc[depth] = pending_sc[depth - 1];
+                int ni = 0;
+                while (*p && p < end && ni < 32) node_name[depth][ni++] = (char)*p++;
+                node_name[depth][ni] = 0;
             }
             while (*p && p < end) p++;
             p++;
@@ -107,6 +121,10 @@ void fdt_init(void *fdt_ptr) {
                 pending_ac[depth] = (int)be32(data);
             if (str_eq(name, "#size-cells") && len == 4)
                 pending_sc[depth] = (int)be32(data);
+
+            if (name_is_cpus(node_name[depth]) && str_eq(name, "timebase-frequency")
+                    && len == 4)
+                fdt_timebase_freq = be32(data);
 
             if (str_eq(name, "reg") && len >= 4) {
                 int ac = pending_ac[depth];
@@ -148,4 +166,8 @@ uint64_t fdt_get_plic_base(void) {
 
 uint64_t fdt_get_pcie_base(void) {
     return fdt_pcie_base ? fdt_pcie_base : 0x30000000;
+}
+
+uint64_t fdt_get_timebase_freq(void) {
+    return fdt_timebase_freq;
 }

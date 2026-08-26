@@ -1,0 +1,36 @@
+package kr.partix.kernel.timer;
+
+/**
+ * Timer — arch-agnostic facade over the HAL timer drivers.
+ *
+ * Both x86_64 (Local APIC timer with PIT auto-fallback) and RISC-V
+ * (SBI TIME driven CLINT timer) expose the same five extern symbols,
+ * so no per-arch stubs are needed.
+ *
+ * Tick rate is 100 Hz (10 ms) — matching sys_now()'s g_tick * 10 ms.
+ */
+class Timer {
+    private extern int timer_init();
+    private extern void timer_tick();
+    private extern void timer_eoi();
+    private extern long timer_ticks();
+    private extern int timer_vector();
+    private extern long timer_sbi_error();
+    private extern void timer_clear_ssip();
+
+    static int init() -> timer_init()
+    static void tick() {
+        timer_tick();
+    }
+    static void eoi() {
+        timer_eoi();
+    }
+    static long getTicks() -> timer_ticks()
+    static int getVector() -> timer_vector()
+    static long getSbiError() -> timer_sbi_error()
+
+    /** Clear supervisor software interrupt pending (RISC-V only; no-op on x86). */
+    static void clearSsi() {
+        timer_clear_ssip();
+    }
+}

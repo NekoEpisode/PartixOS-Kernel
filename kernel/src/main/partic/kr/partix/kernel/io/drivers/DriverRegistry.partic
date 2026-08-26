@@ -3,7 +3,7 @@ package kr.partix.kernel.io.drivers;
 import kr.partix.kernel.io.pci.PCIDevice;
 
 class DriverRegistry {
-    private static final int SLOTS = 64;
+    private static final int SLOTS = 1024;
 
     private static IDriver[] templates = new IDriver[SLOTS];
     private static int registered;

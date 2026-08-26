@@ -2,10 +2,8 @@ package kr.partix.kernel.arch.riscv;
 
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.io.uart.IUART;
+import kr.partix.kernel.timer.Timer;
 
-/**
- * For QEMU RISC-V
- */
 class RISCVUART implements IUART {
     private final long addr;
 
@@ -18,8 +16,12 @@ class RISCVUART implements IUART {
     }
 
     void print(byte b) {
+        // Wait for the transmitter to be ready (LSR bit5 = THRE).
+        // Timeout (1 s) guards against a broken UART hanging the kernel;
+        // on timeout the byte is dropped. Interrupts keep ticking meanwhile.
+        long deadline = Timer.getTicks() + 100;
         while ((System.read8(addr + 0x05) & 0x20) == 0) {
-            // System.halt();
+            if (Timer.getTicks() > deadline) return;
         }
         System.write8(addr, b);
     }

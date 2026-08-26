@@ -1,0 +1,21 @@
+package kr.partix.kernel.event.events;
+
+import kr.partix.kernel.event.AEvent;
+import kr.partix.kernel.event.EventId;
+
+class TimerEvent extends AEvent {
+    private final long ticks;
+    private final long epc;
+    private final long sp;
+
+    TimerEvent(long ticks, long epc, long sp) {
+        this.ticks = ticks;
+        this.epc = epc;
+        this.sp = sp;
+    }
+
+    int getEventId() -> EventId.TIMER_EVENT
+    long getTicks() -> ticks
+    long getEpc() -> epc
+    long getSp() -> sp
+}

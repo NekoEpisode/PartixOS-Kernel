@@ -9,6 +9,9 @@ import kr.partix.kernel.arch.riscv.RISCVInterruptController;
 import kr.partix.kernel.paging.IPageTableManager;
 import kr.partix.kernel.arch.riscv.RISCVPageTableManager;
 import kr.partix.kernel.sys.System;
+import kr.partix.kernel.timer.Timer;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.core.memory.Memory;
 
 class RISCVArch implements IArch {
     private final IUART uart;
@@ -27,7 +30,21 @@ class RISCVArch implements IArch {
     }
 
     void init() {
+        uart.println("[dbg] arch.init");
         ic.init();
+        uart.println("[dbg] ic.init done");
+        long sbiErr = Timer.getSbiError();
+        if (sbiErr != 0) {
+            // SBI set_timer failed — the timer will never fire.
+            // SBI error codes: -1 failed, -2 not supported, -3 invalid param...
+            StrBuilder sb = new StrBuilder();
+            sb.append("[timer] SBI set_timer failed, err=");
+            sb.appendLong(sbiErr);
+            str out = sb.build();
+            uart.println(out);
+            Memory.free(out);
+            sb.dispose();
+        }
     }
 
     short getArchId() -> (short) 1

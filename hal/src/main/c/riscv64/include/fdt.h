@@ -27,5 +27,6 @@ void fdt_init(void *fdt_ptr);
 uint64_t fdt_get_uart_base(void);
 uint64_t fdt_get_plic_base(void);
 uint64_t fdt_get_pcie_base(void);
+uint64_t fdt_get_timebase_freq(void);
 
 #endif

@@ -81,7 +81,9 @@ def compile_partic(
 
     ll_path = ll_files[0]
 
-    if target in ("freestanding", "x86_64-unknown-none"):
+    if target == "freestanding" or target.endswith("-none"):
+        # Rewrite the staged source paths in DWARF to the real absolute paths,
+        # so debuggers (gdb) can find the .partic sources after the build.
         _fixup_ll(ll_path, str(stage) + "/")
 
     return ll_path

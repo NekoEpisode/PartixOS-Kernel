@@ -1,0 +1,32 @@
+package kr.partix.kernel.event.eventlisteners;
+
+import kr.partix.kernel.event.IEventListener;
+import kr.partix.kernel.event.AEvent;
+import kr.partix.kernel.event.EventHandleResult;
+import kr.partix.kernel.event.events.TimerEvent;
+import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.core.memory.Memory;
+
+class TimerEventListener implements IEventListener {
+    int onEvent(AEvent event) {
+        if (event instanceof TimerEvent) {
+            TimerEvent te = (TimerEvent) event;
+            long ticks = te.getTicks();
+            if (ticks % 100 == 0) {
+                // 100 Hz tick -> one line per second
+                StrBuilder sb = new StrBuilder();
+                sb.append("[timer] ");
+                sb.appendLong(ticks / 100);
+                sb.append("s (");
+                sb.appendLong(ticks);
+                sb.append(" ticks)");
+                str out = sb.build();
+                BspKrMain.arch.getUart().println(out);
+                Memory.free(out);
+                sb.dispose();
+            }
+        }
+        return EventHandleResult.HANDLE_OK;
+    }
+}

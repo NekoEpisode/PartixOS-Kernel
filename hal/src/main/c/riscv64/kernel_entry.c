@@ -17,15 +17,15 @@ typedef struct {
 } BootInfo;
 
 // Called from entry.S trap_entry
-// Symbol in .ll: kr_partix_kernel_interrupt_InterruptBridge_dispatch__IJJJV
-extern void kr_partix_kernel_interrupt_InterruptBridge_dispatch__IJJJV(
-    int cause, uint64_t epc, uint64_t sp, uint64_t frame);
+// Symbol in .ll: kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJV
+extern void kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJV(
+    int64_t cause, uint64_t epc, uint64_t sp, uint64_t frame);
 
 void trap_dispatch(uint64_t cause, uint64_t epc, void* frame) {
     uint64_t sp;
     __asm__ volatile("mv %0, sp" : "=r"(sp));
-    kr_partix_kernel_interrupt_InterruptBridge_dispatch__IJJJV(
-        (int)cause, epc, sp, (uint64_t)frame);
+    kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJV(
+        (int64_t)cause, epc, sp, (uint64_t)frame);
 }
 
 void kernel_entry(BootInfo* info) {

@@ -31,8 +31,12 @@ kern_entry:
     la  t0, trap_entry
     csrw stvec, t0
 
-    # Save kernel sp in sscratch for trap entry swap
-    csrw sscratch, sp
+    # sscratch points to a dedicated trap stack, NOT the main kernel stack.
+    # Deep interrupt handling (Partic dispatch -> EventBus -> StrBuilder/UART
+    # printing) uses several KB of stack; sharing the main stack would
+    # clobber the interrupted frame's locals (e.g. BspKrMain's allDevices).
+    la  t0, _trap_stack_top
+    csrw sscratch, t0
 
     # Interrupts enabled later by Partic after all init is done
 
@@ -47,7 +51,7 @@ kern_entry:
 .align 4
 trap_entry:
     # Atomically swap sp and sscratch
-    # sp -> sscratch (kernel_sp saved), sscratch -> sp (interrupted_sp saved)
+    # sp -> sscratch (interrupted_sp saved), sscratch -> sp (trap stack top)
     csrrw sp, sscratch, sp
 
     # Save all registers to trap frame (skip x0)
@@ -133,7 +137,7 @@ trap_entry:
     ld   t6,  232(sp)
 
     addi sp, sp, 256
-    # Restore interrupted sp from sscratch, save kernel_sp back
+    # Restore interrupted sp from sscratch, save trap sp back
     csrrw sp, sscratch, sp
     sret
 
@@ -145,3 +149,9 @@ boot_hartid:
 _stack_bottom:
     .space 1048576
 _stack_top:
+
+# Dedicated trap/interrupt stack (16 KiB).
+.align 16
+_trap_stack_bottom:
+    .space 16384
+_trap_stack_top:
