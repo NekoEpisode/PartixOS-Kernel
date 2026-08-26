@@ -281,8 +281,17 @@ ISR_NOERR 254
 ISR_NOERR 255
 
 # ── Common handler ──────────────────────────────
+# Deep interrupt handling (Partic dispatch -> EventBus -> StrBuilder/UART
+# printing) uses several KB of stack. Running it on the interrupted stack
+# clobbers the preempted frame's locals (e.g. BspKrMain's locals during
+# Hello). So isr_common switches to a dedicated interrupt stack first.
 .align 16
 isr_common:
+    # Switch to the interrupt stack; remember the interrupted stack pointer
+    # (which points at [vector][errcode][RIP][CS][RFLAGS][RSP][SS]).
+    movq %rsp, saved_rsp(%rip)
+    leaq int_stack_top(%rip), %rsp
+
     pushq %rax
     pushq %rbx
     pushq %rcx
@@ -301,16 +310,20 @@ isr_common:
 
     cld
 
-    # rdi = vector number (at offset 15*8 = 120 from rsp)
-    movq 120(%rsp), %rdi
+    # Interrupted frame lives on the main stack, referenced via saved_rsp:
+    #   +0 = vector, +8 = errcode, +16 = RIP, +24 = CS, +32 = RFLAGS, +40 = RSP
+    movq saved_rsp(%rip), %rax
 
-    # rsi = epc = interrupted RIP (at offset 136 from rsp)
-    movq 136(%rsp), %rsi
+    # rdi = vector number
+    movq 0(%rax), %rdi
 
-    # rdx = sp = interrupted RSP = current rsp + 160
-    leaq 160(%rsp), %rdx
+    # rsi = epc = interrupted RIP
+    movq 16(%rax), %rsi
 
-    # rcx = frame = pointer to saved regs
+    # rdx = sp = interrupted RSP (saved at +40)
+    leaq 40(%rax), %rdx
+
+    # rcx = frame = pointer to saved regs (on the interrupt stack)
     movq %rsp, %rcx
 
     call kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJV
@@ -331,10 +344,20 @@ isr_common:
     popq %rbx
     popq %rax
 
-    # Remove vector number + error_code from stack
+    # Back to the main stack, past vector + error code
+    movq saved_rsp(%rip), %rsp
     addq $16, %rsp
 
     iretq
+
+# ── Dedicated interrupt stack ───────────────────
+.section .bss
+.align 16
+int_stack_bottom:
+    .space 16384
+int_stack_top:
+saved_rsp:
+    .space 8
 
 # ── ISR handler pointer table ───────────────────
 .section .rodata

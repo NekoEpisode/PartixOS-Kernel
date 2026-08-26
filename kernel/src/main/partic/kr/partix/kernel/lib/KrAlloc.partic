@@ -3,9 +3,16 @@ package kr.partix.kernel.lib;
 class KrAlloc {
     extern long kr_malloc(long size);
     extern void kr_free(long addr);
+    extern long kr_alloc_pages_used();
+    extern long kr_alloc_small_in_use();
 
     static long allocate(long size) -> kr_malloc(size)
     static void free(long addr) {
         kr_free(addr);
     }
+
+    /** 堆页区已切页数（slab 分配器；回收复用时不再增长）。 */
+    static long getPagesUsed() -> kr_alloc_pages_used()
+    /** 当前在用的堆对象块数。 */
+    static long getSmallInUse() -> kr_alloc_small_in_use()
 }

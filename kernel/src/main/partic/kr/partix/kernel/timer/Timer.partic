@@ -14,7 +14,7 @@ package kr.partix.kernel.timer;
  */
 class Timer {
     /** Timer tick frequency in Hz (100 = one tick per 10 ms). */
-    static final long TICK_HZ = 100;
+    static final long TICK_HZ = 200;
 
     private extern int timer_init();
     private extern void timer_tick();

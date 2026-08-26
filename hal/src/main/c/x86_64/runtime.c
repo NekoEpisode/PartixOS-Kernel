@@ -1,19 +1,15 @@
 #include <stdint.h>
 #include "../runtime/timer_config.h"
+#include "../runtime/allocator.h"
 
-static uint64_t heap_next = 0x2000000;
-static uint64_t heap_top  = 0x2800000;
+// Heap region for the slab allocator (runtime/allocator.c).
+// NOTE: must be large enough for the 1 TiB identity page tables
+// (~8 MiB of 8192-byte PD allocations) plus kernel runtime objects.
+uint64_t kr_heap_start = 0x2000000;
+uint64_t kr_heap_end  = 0x4000000;   // 32 MiB
 
-uint64_t kr_malloc(uint64_t size) {
-    size = (size + 15) & ~15ULL;
-    uint64_t ptr = heap_next;
-    heap_next += size;
-    return ptr;
-}
-
-void kr_free(uint64_t addr) {
-    (void)addr;
-}
+uint64_t kr_malloc(uint64_t size) { return kr_alloc(size); }
+void kr_free(uint64_t addr) { kr_dealloc(addr); }
 
 void* memcpy(void* dst, const void* src, unsigned long n) {
     unsigned char* d = (unsigned char*)dst;

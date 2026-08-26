@@ -39,7 +39,9 @@ class EventBus {
     static void call(AEvent event) {
         if (!inited) throw new NotInitializedException("EventBus not initialized!", null);
         if (event != null) {
-            List<IEventListener> eventListenerList = eventListeners.get(new IntegerBox(event.getEventId()));
+            IntegerBox key = new IntegerBox(event.getEventId());
+            List<IEventListener> eventListenerList = eventListeners.get(key);
+            Memory.free((long) key);   // get() 只用 key 比较，不持有
             if (eventListenerList != null) {
                 for (int i = 0; i < eventListenerList.size(); i++) {
                     eventListenerList.get(i).onEvent(event);

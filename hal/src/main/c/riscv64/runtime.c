@@ -1,19 +1,13 @@
 #include <stdint.h>
 #include "../runtime/timer_config.h"
+#include "../runtime/allocator.h"
 
-static uint64_t heap_next = 0x81000000;
-static uint64_t heap_top  = 0x82000000;
+// Heap region for the slab allocator (runtime/allocator.c).
+uint64_t kr_heap_start = 0x81000000;
+uint64_t kr_heap_end  = 0x82000000;
 
-uint64_t kr_malloc(uint64_t size) {
-    size = (size + 15) & ~15ULL;
-    uint64_t ptr = heap_next;
-    heap_next += size;
-    return ptr;
-}
-
-void kr_free(uint64_t addr) {
-    (void)addr;
-}
+uint64_t kr_malloc(uint64_t size) { return kr_alloc(size); }
+void kr_free(uint64_t addr) { kr_dealloc(addr); }
 
 void* memcpy(void* dst, const void* src, unsigned long n) {
     unsigned char* d = (unsigned char*)dst;

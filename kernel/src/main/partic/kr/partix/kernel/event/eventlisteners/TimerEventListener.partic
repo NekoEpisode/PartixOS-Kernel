@@ -5,6 +5,7 @@ import kr.partix.kernel.event.AEvent;
 import kr.partix.kernel.event.EventHandleResult;
 import kr.partix.kernel.event.events.TimerEvent;
 import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.lib.KrAlloc;
 import kr.partix.kernel.timer.Timer;
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.core.memory.Memory;
@@ -15,13 +16,17 @@ class TimerEventListener implements IEventListener {
             TimerEvent te = (TimerEvent) event;
             long ticks = te.getTicks();
             if (ticks % Timer.TICK_HZ == 0) {
-                // one line per second
+                // one line per second, plus heap usage to watch for leaks
                 StrBuilder sb = new StrBuilder();
                 sb.append("[timer] ");
                 sb.appendLong(ticks / Timer.TICK_HZ);
                 sb.append("s (");
                 sb.appendLong(ticks);
-                sb.append(" ticks)");
+                sb.append(" ticks) heap=");
+                sb.appendLong(KrAlloc.getPagesUsed());
+                sb.append("p/");
+                sb.appendLong(KrAlloc.getSmallInUse());
+                sb.append("b");
                 str out = sb.build();
                 BspKrMain.arch.getUart().println(out);
                 Memory.free(out);
