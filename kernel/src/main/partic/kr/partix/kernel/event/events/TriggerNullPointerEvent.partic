@@ -1,0 +1,27 @@
+package kr.partix.kernel.event.events;
+
+import kr.partix.kernel.event.EventId;
+import kr.partix.kernel.event.AEvent;
+
+/**
+ * NULL 页 Page Fault 通知事件。
+ * 由 KernelNullPointerFault.trigger 在中断上下文中发布。
+ * 监听器拿不到中断上下文，只能读取本事件做记录/副作用；
+ */
+class TriggerNullPointerEvent extends AEvent {
+    private final long address;
+    private final long rip;
+
+    TriggerNullPointerEvent(long address, long rip) {
+        this.address = address;
+        this.rip = rip;
+    }
+
+    int getEventId() -> EventId.TRIGGER_NULL_POINTER_EVENT
+
+    /** 被访问的地址（恒 < 4096，位于 NULL 页）。 */
+    long getAddress() -> address
+
+    /** fault 指令地址（x86: RIP / riscv: sepc），用于对照 kernel.elf 定位代码。 */
+    long getRip() -> rip
+}

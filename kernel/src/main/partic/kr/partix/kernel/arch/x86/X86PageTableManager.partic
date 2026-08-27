@@ -28,6 +28,7 @@ class X86PageTableManager implements IPageTableManager {
     void init() {
         pml4 = allocZeroPage();
         buildIdentityMap();
+        protectNullPage();
     }
 
     private void buildIdentityMap() {
@@ -93,5 +94,23 @@ class X86PageTableManager implements IPageTableManager {
             if (end > max) max = end;
         }
         return max;
+    }
+
+    /**
+     * 把第一 2MB 大页（0x0-0x200000）拆成 4KB 页，0x0-0xFFF 不可访问。
+     * 空指针访问（读/写地址 0）将触发 Page Fault（#PF），由
+     * X86InterruptController 转换为 KernelNullPointerException。
+     */
+    private void protectNullPage() {
+        long pdpt = System.read64(pml4) & 0xFFFFFFFFFFFFF000L;
+        long pd = System.read64(pdpt) & 0xFFFFFFFFFFFFF000L;
+        long pteTable = allocZeroPage();
+        // pd[0]：从 2MB 大页项改为指向 4KB pte 表（去掉 PS 位）
+        System.write64(pd, (pteTable & 0xFFFFFFFFFFFFF000L) | PML4E_PRESENT | PML4E_RW);
+        for (int i = 1; i < 512; i++) {
+            long phys = (long)i * 4096;
+            System.write64(pteTable + (long)i * 8, phys | PML4E_PRESENT | PML4E_RW);
+        }
+        // pte[0] 保持 0（allocZeroPage 清零）→ 0x0-0xFFF 不可访问
     }
 }

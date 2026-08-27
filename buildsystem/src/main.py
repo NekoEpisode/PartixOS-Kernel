@@ -144,6 +144,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         extra["KERNEL.ELF"] = outputs["kernel"]
 
     efi_name = "BOOTRISCV64.EFI" if arch == "riscv64" else "BOOTX64.EFI"
+    # startup.nsh：UEFI Shell 启动时自动执行，免去每次手动输入 EFI 路径。
+    # 相对路径基于当前卷（Shell 启动时 = startup.nsh 所在卷根）。
+    nsh = Path("build") / "startup.nsh"
+    nsh.write_text(f"\\EFI\\BOOT\\{efi_name}\n")
+    extra["startup.nsh"] = nsh
     create_disk_image(outputs.get("bootloader"), disk, extra_files=extra, efi_name=efi_name)
 
     launch_qemu(run_cfg, disk, arch, args.qemu_args or "")

@@ -1,0 +1,38 @@
+package kr.partix.kernel.event.eventlisteners;
+
+import kr.partix.kernel.event.IEventListener;
+import kr.partix.kernel.event.AEvent;
+import kr.partix.kernel.event.EventHandleResult;
+import kr.partix.kernel.event.events.TriggerNullPointerEvent;
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * NULL 页 Fault 的默认监听器
+ */
+class NullPointerEventListener implements IEventListener {
+    int onEvent(AEvent event) {
+        if (event instanceof TriggerNullPointerEvent) {
+            TriggerNullPointerEvent npe = (TriggerNullPointerEvent) event;
+            StrBuilder sb = new StrBuilder();
+            sb.append("[NPE-EVENT] addr=");
+            str a = StrUtils.toHex(npe.getAddress());
+            sb.append(a);
+            Memory.free(a);
+            sb.append(" rip=");
+            str r = StrUtils.toHex(npe.getRip());
+            sb.append(r);
+            Memory.free(r);
+            sb.append(" -> panicking");
+            str out = sb.build();
+            BspKrMain.arch.getUart().println(out);
+            Memory.free(out);
+            sb.dispose();
+            System.panic();
+        }
+        return EventHandleResult.HANDLE_OK;
+    }
+}

@@ -150,16 +150,6 @@ _Unwind_Reason_Code partic_personality(
         action = read_uleb128(&cs_p);
         if (ip_off >= s && ip_off < s + l) { found = 1; break; }
     }
-    if (found && (lp_off == 0 || action == 0)) {
-        cs_p = p; found = 0;
-        while (cs_p < cs_end) {
-            uint64_t s = read_enc_val(&cs_p, cs_enc);
-            uint64_t l = read_enc_val(&cs_p, cs_enc);
-            lp_off = read_enc_val(&cs_p, cs_enc);
-            action = read_uleb128(&cs_p);
-            if (lp_off > 0 && action > 0) { found = 1; break; }
-        }
-    }
     const uint8_t *action_table = cs_end;
 
     if (actions & _UA_SEARCH_PHASE) {
@@ -187,6 +177,7 @@ _Unwind_Reason_Code partic_personality(
 
     if (actions & _UA_CLEANUP_PHASE) {
         if (!found) return _URC_CONTINUE_UNWIND;
+        if (lp_off == 0) return _URC_CONTINUE_UNWIND;   // no landing pad
 
         int is_handler = (actions & _UA_HANDLER_FRAME) != 0;
         int has_cleanup = (action == 0);

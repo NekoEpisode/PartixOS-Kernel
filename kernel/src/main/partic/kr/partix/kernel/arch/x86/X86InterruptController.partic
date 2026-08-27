@@ -5,6 +5,7 @@ import kr.partix.kernel.interrupt.IInterruptController;
 import kr.partix.kernel.interrupt.IInterruptHandler;
 import kr.partix.kernel.interrupt.IInterruptData;
 import kr.partix.kernel.interrupt.Interrupt;
+import kr.partix.kernel.exception.KernelNullPointerFault;
 import kr.partix.kernel.timer.Timer;
 
 class X86InterruptController implements IInterruptController {
@@ -13,10 +14,13 @@ class X86InterruptController implements IInterruptController {
     private static final int PIC2_CMD  = 0xA0;
     private static final int PIC2_DATA = 0xA1;
     private static final int IRQ_BASE  = 0x20;
+    private static final int PF_VECTOR = 14;
 
     private final IInterruptHandler[] handlers = new IInterruptHandler[256];
     private int pic1Mask;
     private int pic2Mask;
+
+    private extern long paging_read_cr2();
 
     void init() {
         System.write8(PIC1_CMD, (byte) 0x11);
@@ -87,6 +91,15 @@ class X86InterruptController implements IInterruptController {
 
     void dispatch(long cause, long epc, long sp, long frame) {
         int vector = (int) cause;
+
+        // NULL 页 Page Fault → TriggerNullPointerEvent（EventBus → 监听器）
+        if (vector == PF_VECTOR) {
+            long cr2 = paging_read_cr2();
+            if (cr2 < 4096) {
+                KernelNullPointerFault.trigger(cr2, epc);
+                return;
+            }
+        }
 
         if (vector == Timer.getVector()) {
             // Timer interrupt — bump g_tick and notify via TimerEvent.

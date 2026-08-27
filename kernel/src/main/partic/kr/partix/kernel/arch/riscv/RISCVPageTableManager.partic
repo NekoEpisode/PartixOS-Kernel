@@ -34,6 +34,7 @@ class RISCVPageTableManager implements IPageTableManager {
     void init() {
         pgd = allocZeroPage();
         buildIdentityMap();
+        protectNullPage();
     }
 
     private void buildIdentityMap() {
@@ -93,5 +94,24 @@ class RISCVPageTableManager implements IPageTableManager {
             if (end > max) max = end;
         }
         return max;
+    }
+
+    /**
+     * 把第一 2MB 大页（0x0-0x200000）拆成 4KB 页，0x0-0xFFF 不可访问。
+     * 空指针访问将触发 Page Fault（scause 13/15），由
+     * RISCVInterruptController 转换为 KernelNullPointerException。
+     */
+    private void protectNullPage() {
+        long pgdEntry = System.read64(pgd);
+        long pmd = ((pgdEntry & 0xFFFFFFFFFFFFFC00L) << 2);
+        long pteTable = allocZeroPage();
+        // pmd[0]：从 2MB 大页项改为指向 4KB pte 表（无大页标志）
+        System.write64(pmd, (pteTable >> 2) | PTE_V);
+        for (int i = 1; i < 512; i++) {
+            long phys = (long)i * 4096;
+            System.write64(pteTable + (long)i * 8,
+                    (phys >> 2) | PTE_V | PTE_R | PTE_W | PTE_X | PTE_A | PTE_D);
+        }
+        // pte[0] 保持 0（allocZeroPage 清零）→ 0x0-0xFFF 不可访问
     }
 }

@@ -1,0 +1,43 @@
+package kr.partix.kernel.exception;
+
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.event.EventBus;
+import kr.partix.kernel.event.events.TriggerNullPointerEvent;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * NULL 页保护桥（Partic 侧）。
+ *
+ * 由两架构的 dispatch 在检测到 NULL 页 Page Fault 时调用：
+ * 打印 [NPE] 诊断，然后把 fault 作为 TriggerNullPointerEvent 发布到
+ * EventBus。控制流如何处理完全由监听器决定——默认注册的
+ * NullPointerEventListener 会打印事件内容并停机（halt）。
+ */
+class KernelNullPointerFault {
+    /**
+     * @param address 被访问的地址（CR2 / stval，恒 < 4096）
+     * @param epc     fault 指令地址（x86: RIP / riscv: sepc）
+     */
+    static void trigger(long address, long epc) {
+        StrBuilder sb = new StrBuilder();
+        sb.append("[NPE] null deref: addr=");
+        str a = StrUtils.toHex(address);
+        sb.append(a);
+        Memory.free(a);
+        sb.append(" rip=");
+        str r = StrUtils.toHex(epc);
+        sb.append(r);
+        Memory.free(r);
+        str out = sb.build();
+        BspKrMain.arch.getUart().println(out);
+        Memory.free(out);
+        sb.dispose();
+
+        TriggerNullPointerEvent event = new TriggerNullPointerEvent(address, epc);
+        EventBus.call(event);
+        // 监听器（默认停机）返回后才执行到；防止未来"只记录"型监听器泄漏。
+        Memory.free((long) event);
+    }
+}

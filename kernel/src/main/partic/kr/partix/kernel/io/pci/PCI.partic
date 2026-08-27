@@ -1,7 +1,5 @@
 package kr.partix.kernel.io.pci;
 
-import kr.partix.kernel.sys.System;
-import lang.partic.stdlib.additional.utils.StrUtils;
 import kr.partix.kernel.main.BspKrMain;
 
 class PCI {

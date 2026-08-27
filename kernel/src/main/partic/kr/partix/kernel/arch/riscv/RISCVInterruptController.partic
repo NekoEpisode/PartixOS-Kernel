@@ -3,8 +3,8 @@ package kr.partix.kernel.arch.riscv;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.interrupt.IInterruptController;
 import kr.partix.kernel.interrupt.IInterruptHandler;
-import kr.partix.kernel.interrupt.IInterruptData;
 import kr.partix.kernel.interrupt.Interrupt;
+import kr.partix.kernel.exception.KernelNullPointerFault;
 import kr.partix.kernel.timer.Timer;
 
 class RISCVInterruptController implements IInterruptController {
@@ -27,6 +27,7 @@ class RISCVInterruptController implements IInterruptController {
     private boolean plicReady = false;
 
     private extern long fdt_get_plic_base();
+    private extern long paging_read_stval();
 
     void init() {
         plicBase = fdt_get_plic_base();
@@ -99,6 +100,17 @@ class RISCVInterruptController implements IInterruptController {
             // Unknown interrupt cause — report it.
             Interrupt.fire((int) code, epc, sp, null);
             return;
+        }
+
+        // NULL 页 Page/Access Fault → TriggerNullPointerEvent（EventBus → 监听器）
+        // 13/15 = load/store page fault；5/7 = load/store access fault
+        // （后两者在部分真机 OpenSBI PMP 配置下可能出现）
+        if (code == 13 || code == 15 || code == 5 || code == 7) {
+            long stval = paging_read_stval();
+            if (stval < 4096) {
+                KernelNullPointerFault.trigger(stval, epc);
+                return;
+            }
         }
 
         // Synchronous exception — report with the exception code as vector.
