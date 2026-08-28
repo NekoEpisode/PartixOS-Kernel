@@ -76,6 +76,8 @@ class QemuConfig:
     memory: str = "256M"
     ovmf_code: str = ""
     ovmf_vars: str = ""
+    bios: str = ""          # 非空时 riscv64 用 -bios 单镜像固件（如完整版 u-boot.bin），不走 pflash
+    kernel: str = ""        # 非空时追加 -kernel 镜像（S-mode U-Boot：-bios default + -kernel u-boot.bin）
     extra_args: str = "-net none -serial stdio"
 
     def qemu_binary(self, arch: str) -> str:
@@ -86,6 +88,7 @@ class QemuConfig:
         return found or name
 
     def resolve_ovmf(self, arch: str) -> None:
+        # 仅在用户完全没有配置时做默认探测；用户显式写过的值绝不覆盖。
         if not self.ovmf_code or not Path(self.ovmf_code).exists():
             for p in OVMF_CODE_PATHS.get(arch, []):
                 if Path(p).exists():
@@ -177,6 +180,8 @@ def load_settings() -> BuildSettings:
                     memory=qd.get("memory", "256M"),
                     ovmf_code=qd.get("ovmf_code", ""),
                     ovmf_vars=qd.get("ovmf_vars", ""),
+                    bios=qd.get("bios", ""),
+                    kernel=qd.get("kernel", ""),
                     extra_args=qd.get("extra_args", "-net none -serial stdio"),
                 )
 
@@ -223,6 +228,8 @@ def _save(settings: BuildSettings) -> None:
             "memory": qc.memory,
             "ovmf_code": qc.ovmf_code,
             "ovmf_vars": qc.ovmf_vars,
+            "bios": qc.bios,
+            "kernel": qc.kernel,
             "extra_args": qc.extra_args,
         }
     CONFIG_PATH.write_text(json.dumps(data, indent=2))

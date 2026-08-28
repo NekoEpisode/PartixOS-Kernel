@@ -1,0 +1,25 @@
+package kr.partix.kernel.io.drivers.display.gop;
+
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.DeviceResource;
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.io.screen.UefiFramebufferScreen;
+
+/** UEFI GOP 平台设备描述：有真实 framebuffer 时注册进 DeviceRegistry。 */
+class GopDevice implements IDevice {
+    int getBusType() -> BusType.PLATFORM
+
+    long getVendorId() -> 0
+
+    long getDeviceId() -> 0
+
+    str getCompatible() -> "uefi-gop"
+
+    int getResourceCount() -> 1
+
+    DeviceResource getResource(int index) -> new DeviceResource(
+            DeviceResource.MEM, UefiFramebufferScreen.gopBase(),
+            UefiFramebufferScreen.gopSize())
+
+    str getName() -> "uefi-gop"
+}

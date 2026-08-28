@@ -1,0 +1,26 @@
+package kr.partix.kernel.device;
+
+/**
+ * 中性设备描述：驱动只面向它，不面向具体总线。
+ * - PCI 设备：busType=Pci，用 vendorId/deviceId 匹配，BAR 转资源
+ * - 平台设备（GOP 等）：busType=Platform，用 compatible 匹配
+ * 设备由发现机制（PCI 枚举 / 平台代码）注册进 DeviceRegistry。
+ */
+interface IDevice {
+    int getBusType();
+
+    /** PCI: vendorId；平台设备为 0。 */
+    long getVendorId();
+
+    /** PCI: deviceId；平台设备为 0。 */
+    long getDeviceId();
+
+    /** 平台/DT 设备："uefi-gop" 等；PCI 设备为 null。 */
+    str getCompatible();
+
+    int getResourceCount();
+    DeviceResource getResource(int index);
+
+    /** 调试标识："pci-1af4-1050" / "uefi-gop"。 */
+    str getName();
+}

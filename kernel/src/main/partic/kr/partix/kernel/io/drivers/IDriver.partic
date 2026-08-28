@@ -1,9 +1,13 @@
 package kr.partix.kernel.io.drivers;
 
-import kr.partix.kernel.io.pci.PCIDevice;
+import kr.partix.kernel.device.IDevice;
 
 interface IDriver {
     int getType();
-    boolean match(PCIDevice device);
-    IDriver create(PCIDevice device);
+
+    /** 驱动自匹配：PCI 驱动查 vendor/device，平台驱动查 busType/compatible。 */
+    boolean match(IDevice device);
+
+    /** 为匹配的设备创建驱动实例。 */
+    IDriver create(IDevice device);
 }

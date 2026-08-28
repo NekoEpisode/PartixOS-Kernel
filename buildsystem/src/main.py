@@ -125,7 +125,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     settings = load_settings()
     qc = settings.qemu_for(arch)
-    if not qc.ovmf_code:
+    if not qc.ovmf_code and not qc.bios and not qc.kernel:
         run_cfg = _interactive_qemu_setup(arch)
         settings.qemu[arch] = _run_to_config(run_cfg)
         save_settings(settings)
@@ -135,6 +135,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             memory=qc.memory,
             ovmf_code=qc.ovmf_code,
             ovmf_vars=qc.ovmf_vars,
+            bios=qc.bios,
+            kernel=qc.kernel,
             extra_args=qc.extra_args,
         )
 
@@ -160,6 +162,7 @@ def _run_to_config(r: QemuRunConfig):
     return QemuConfig(
         qemu=r.qemu_binary, memory=r.memory,
         ovmf_code=r.ovmf_code, ovmf_vars=r.ovmf_vars,
+        bios=r.bios, kernel=r.kernel,
         extra_args=r.extra_args,
     )
 

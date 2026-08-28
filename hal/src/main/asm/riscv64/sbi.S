@@ -31,4 +31,15 @@ sbi_set_timer_legacy:
     ecall
     ret
 
+// void sbi_console_putchar(int c)
+// Legacy SBI v0.1: a7 = 1 (SBI_CONSOLE_PUTCHAR), a0 = char.
+// Used by BootFail: the platform UART address may be unknown (no FDT),
+// but an SBI-conformant M-mode firmware (OpenSBI) always provides this.
+.globl sbi_console_putchar
+.type  sbi_console_putchar, @function
+sbi_console_putchar:
+    li  a7, 1                 // legacy SBI_CONSOLE_PUTCHAR
+    ecall
+    ret
+
 .section .note.GNU-stack,"",@progbits

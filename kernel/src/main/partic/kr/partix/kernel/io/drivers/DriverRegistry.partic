@@ -1,6 +1,7 @@
 package kr.partix.kernel.io.drivers;
 
-import kr.partix.kernel.io.pci.PCIDevice;
+import kr.partix.kernel.device.DeviceRegistry;
+import kr.partix.kernel.device.IDevice;
 
 class DriverRegistry {
     private static final int SLOTS = 1024;
@@ -13,14 +14,19 @@ class DriverRegistry {
         registered++;
     }
 
-    static IDriver[] findAll(int type, PCIDevice[] devices) {
-        IDriver[] result = new IDriver[devices.length];
+    /**
+     * 遍历设备注册中心，驱动自匹配；每个 (驱动, 设备) 对 create 一次。
+     * 设备来源（PCI / 平台 / 未来 DT）对驱动完全透明。
+     */
+    static IDriver[] findAll(int type) {
+        IDriver[] result = new IDriver[DeviceRegistry.getCount()];
         int found = 0;
-        for (int i = 0; i < devices.length; i++) {
-            if (devices[i] == null) continue;
+        for (int i = 0; i < DeviceRegistry.getCount(); i++) {
+            IDevice dev = DeviceRegistry.get(i);
+            if (dev == null) continue;
             for (int j = 0; j < registered; j++) {
-                if (templates[j].getType() == type && templates[j].match(devices[i])) {
-                    result[found++] = templates[j].create(devices[i]);
+                if (templates[j].getType() == type && templates[j].match(dev)) {
+                    result[found++] = templates[j].create(dev);
                     break;
                 }
             }

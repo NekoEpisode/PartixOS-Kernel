@@ -27,7 +27,6 @@
 extern volatile unsigned long g_tick;
 
 #define SIE_STIE_BIT        5
-#define TIMEBASE_FALLBACK   10000000ULL   // QEMU virt & most boards: 10 MHz
 
 #define SBI_SUCCESS         0
 
@@ -38,7 +37,7 @@ extern uint64_t fdt_get_timebase_freq(void);
 extern long sbi_set_timer(uint64_t stime_value);
 extern long sbi_set_timer_legacy(uint64_t stime_value);
 
-static uint64_t timebase = TIMEBASE_FALLBACK;
+static uint64_t timebase = 0;
 static long last_sbi_error = 0;
 
 static inline uint64_t read_time(void) {
@@ -58,12 +57,14 @@ static void set_next_deadline(void) {
 }
 
 int timer_init(void) {
-    // Sanity-clamp the FDT timebase: a corrupt/absent value must not
-    // overflow the deadline computation (which would storm STIP).
+    // 时基频率必须来自 FDT（timebase-frequency），无 fallback。
+    // 缺失/越界时返回 -1：不开启 STIE、不 arm，避免错误的 deadline 造成
+    // 中断风暴；由 Partic 侧报 BOOT FAILED。
     uint64_t tb = fdt_get_timebase_freq();
-    if (tb >= 100000ULL && tb <= 1000000000ULL) {
-        timebase = tb;
+    if (tb < 100000ULL || tb > 1000000000ULL) {
+        return -1;
     }
+    timebase = tb;
 
     // Enable the supervisor timer interrupt (STIE) in sie.
     // (io.c's enableInterrupts() also writes sie with SSIE|STIE|SEIE, so this

@@ -8,6 +8,8 @@
 
 #pragma once
 
+// FDT config table GUID 标准值（0xe0 结尾）：
+// U-Boot (EFI_FDT_GUID) 与 edk2 (EFI_FDT_TABLE_GUID) 一致。
 #define FDT_TABLE_GUID \
   { 0xb1b621d5, 0xf19c, 0x41a5, { 0x83, 0x0b, 0xd9, 0x15, 0x2c, 0x69, 0xaa, 0xe0 } }
 

@@ -30,10 +30,14 @@ void trap_dispatch(uint64_t cause, uint64_t epc, void* frame) {
 
 void kernel_entry(BootInfo* info) {
     if (info) {
-        gop_framebuffer = info->framebuffer;
-        gop_width  = info->width;
-        gop_height = info->height;
-        gop_stride = info->stride;
+        // 无 GOP 时 framebuffer 为 0，width/height/stride 不赋值（保持 0），
+        // 防止 bootloader 栈垃圾传播到 gop_* 全局。
+        if (info->framebuffer) {
+            gop_framebuffer = info->framebuffer;
+            gop_width  = info->width;
+            gop_height = info->height;
+            gop_stride = info->stride;
+        }
         uefi_mmap_addr = info->memoryMap;
         uefi_mmap_size = info->memoryMapSize;
         uefi_mmap_desc_size = info->memoryMapDescriptorSize;

@@ -4,19 +4,27 @@ import kr.partix.kernel.sys.System;
 import kr.partix.kernel.io.pci.IPCIIO;
 
 class RISCVPCIIO implements IPCIIO {
-    private final long ecam;
+    private long ecam;
 
     RISCVPCIIO(long ecam) {
         this.ecam = ecam;
     }
 
+    /** 基址可由 DT 扫描后更新（arch.init 里从 DeviceRegistry 的 PCIe 控制器节点取）。 */
+    void updateEcam(long ecam) {
+        this.ecam = ecam;
+    }
+
+    /** ECAM 基址来自设备树；0 = 没有 PCI 主机控制器。 */
+    boolean isAvailable() -> ecam != 0
+
     int readConfig32(int bus, int slot, int func, int offset) {
-        long addr = ecam + ((long)bus << 20) | ((long)slot << 15) | ((long)func << 12) | (long)offset;
+        long addr = ecam + (((long)bus << 20) | ((long)slot << 15) | ((long)func << 12) | (long)offset);
         return System.read32(addr);
     }
 
     void writeConfig32(int bus, int slot, int func, int offset, int value) {
-        long addr = ecam + ((long)bus << 20) | ((long)slot << 15) | ((long)func << 12) | (long)offset;
+        long addr = ecam + (((long)bus << 20) | ((long)slot << 15) | ((long)func << 12) | (long)offset);
         System.write32(addr, value);
     }
 

@@ -1,0 +1,18 @@
+package kr.partix.kernel.device;
+
+/** 设备资源：一段地址范围或一个中断（PCI BAR / GOP framebuffer / DT reg 统一归约）。 */
+class DeviceResource {
+    static final int MEM = 0;
+    static final int IO  = 1;
+    static final int IRQ = 2;
+
+    int type;
+    long start;
+    long size;      // IRQ 时忽略
+
+    DeviceResource(int type, long start, long size) {
+        this.type = type;
+        this.start = start;
+        this.size = size;
+    }
+}

@@ -1,0 +1,164 @@
+package kr.partix.kernel.fdt;
+
+import kr.partix.kernel.device.DTDevice;
+import kr.partix.kernel.device.DeviceRegistry;
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.additional.utils.StrUtils;
+
+/**
+ * 设备树（FDT）扫描器：解析 riscv 的 FDT 并把有 compatible 的设备节点注册进
+ * DeviceRegistry（busType=DT）。
+ *
+ * 只负责发现与注册，不输出。所有已注册设备的统一列表由
+ * BspKrMain 在枚举完成后打印（与 PCI 同一展示层）。
+ *
+ * 不维护任何"平台设施"过滤名单：DT 里有什么就如实注册什么。没有驱动
+ * 匹配的条目（UART/PLIC/CLINT 等底座设施）在注册中心躺着也无害——驱动
+ * 匹配天然免疫；底座仍由 arch 层直连管理。
+ *
+ * FDT 是只读内存（内核生命周期），全部直接读取，零分配零释放。
+ */
+class FdtScanner {
+    private static final int FDT_BEGIN_NODE = 1;
+    private static final int FDT_END_NODE   = 2;
+    private static final int FDT_PROP       = 3;
+    private static final int FDT_NOP        = 4;
+    private static final int FDT_END        = 9;
+
+    private static final int MAX_DEPTH = 16;
+
+    private extern long fdt_get_base();
+
+    private static long structBase;
+    private static long structEnd;
+    private static long stringsBase;
+
+    // 深度栈：每个深度的 #address-cells/#size-cells（子节点继承父节点）
+    private static int[] addrCells = new int[MAX_DEPTH];
+    private static int[] sizeCells = new int[MAX_DEPTH];
+    private static int depth;
+
+    // 当前节点收集
+    private static long compatPtr;
+    private static long regAddr;
+    private static long regSize;
+    private static boolean hasReg;
+
+    /** FDT 是大端：小端机器上读取要交换字节。 */
+    private static int fdtRead32(long addr) {
+        int b0 = (int) System.read8(addr) & 0xFF;
+        int b1 = (int) System.read8(addr + 1) & 0xFF;
+        int b2 = (int) System.read8(addr + 2) & 0xFF;
+        int b3 = (int) System.read8(addr + 3) & 0xFF;
+        return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+    }
+
+    private static long fdtRead64(long addr) {
+        long hi = (long) fdtRead32(addr) & 0xFFFFFFFFL;
+        long lo = (long) fdtRead32(addr + 4) & 0xFFFFFFFFL;
+        return (hi << 32) | lo;
+    }
+
+    private static void registerCurrentNode() {
+        if (compatPtr == 0) return;
+        str comp = (str) compatPtr;
+        if (StrUtils.length(comp) == 0) return;
+        DeviceRegistry.register(new DTDevice(comp, regAddr, regSize));
+    }
+
+    static void scanAndRegister() {
+        long base = fdt_get_base();
+        if (base == 0) return;
+        // fdtRead32 返回有符号 int：0xD00DFEED 的位模式在 int 里是负数，
+        // 必须先无符号化（& 0xFFFFFFFFL）再与 long 字面量比较，否则永远不等。
+        long magic = (long) fdtRead32(base) & 0xFFFFFFFFL;
+        if (magic != 0xD00DFEEDL) return;
+
+        long offStruct  = (long) fdtRead32(base + 8) & 0xFFFFFFFFL;
+        long offStrings = (long) fdtRead32(base + 12) & 0xFFFFFFFFL;
+        long sizeStruct = (long) fdtRead32(base + 36) & 0xFFFFFFFFL;   // 36 = size_dt_struct（16 是 off_mem_rsvmap）
+        structBase  = base + offStruct;
+        structEnd   = structBase + sizeStruct;
+        stringsBase = base + offStrings;
+
+        depth = 0;
+        addrCells[0] = 1;
+        sizeCells[0] = 1;
+        compatPtr = 0;
+        regAddr = 0;
+        regSize = 0;
+        hasReg = false;
+
+        long p = structBase;
+        while (p < structEnd) {
+            int token = fdtRead32(p);
+            p += 4;
+            if (token == FDT_BEGIN_NODE) {
+                // 节点名（\0 结尾）：名字字段（含 \0）整体对齐到 4。
+                // p 停在 \0 上，所以要先 +1 跳过 \0 再对齐：(p+4)&~3。
+                // 注意 (p+3)&~3 在 \0 已对齐时（如根节点空名）会少跳 4 字节，
+                // 下一个 token 会读到名字的 \0（=0）直接 break。
+                while (System.read8(p) != 0) p += 1;
+                p = (p + 4) & ~3L;
+                // 子节点 cells 继承父节点
+                if (depth + 1 < MAX_DEPTH) {
+                    addrCells[depth + 1] = addrCells[depth];
+                    sizeCells[depth + 1] = sizeCells[depth];
+                }
+                depth += 1;
+                compatPtr = 0;
+                regAddr = 0;
+                regSize = 0;
+                hasReg = false;
+            } else if (token == FDT_PROP) {
+                int len = fdtRead32(p);
+                int nameOff = fdtRead32(p + 4);
+                long data = p + 8;
+                p = data + (long) len;
+                p = (p + 3) & ~3L;
+
+                str name = (str) (stringsBase + (long) nameOff);
+                if (StrUtils.equals(name, "compatible") && compatPtr == 0 && len > 0) {
+                    compatPtr = data;
+                } else if (StrUtils.equals(name, "reg")) {
+                    // reg 用父节点的 cells 解析
+                    int ac = addrCells[depth - 1];
+                    int sc = sizeCells[depth - 1];
+                    if (len >= ac * 4 + sc * 4) {
+                        if (ac == 2) {
+                            regAddr = fdtRead64(data);
+                        } else {
+                            regAddr = (long) fdtRead32(data) & 0xFFFFFFFFL;
+                        }
+                        if (sc == 2) {
+                            regSize = fdtRead64(data + (long) ac * 4);
+                        } else {
+                            regSize = (long) fdtRead32(data + (long) ac * 4) & 0xFFFFFFFFL;
+                        }
+                        hasReg = true;
+                    }
+                } else if (StrUtils.equals(name, "#address-cells") && len >= 4) {
+                    addrCells[depth] = fdtRead32(data);
+                } else if (StrUtils.equals(name, "#size-cells") && len >= 4) {
+                    sizeCells[depth] = fdtRead32(data);
+                }
+            } else if (token == FDT_END_NODE) {
+                registerCurrentNode();
+                // 注册后清空：否则父节点 END 时会复用最后一个子节点的
+                // compatible/reg（如 soc/根节点本身没有 compatible 时，
+                // pci-host-ecam-generic 会被重复注册 3 次）。
+                compatPtr = 0;
+                regAddr = 0;
+                regSize = 0;
+                hasReg = false;
+                if (depth > 0) depth -= 1;
+            } else if (token == FDT_NOP) {
+                // skip
+            } else if (token == FDT_END) {
+                break;
+            } else {
+                break;   // 未知 token——终止
+            }
+        }
+    }
+}

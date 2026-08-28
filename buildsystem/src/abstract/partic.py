@@ -1,9 +1,31 @@
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 from typing import List
 
 from ..common.runner import run_cmd, BuildError
 from ..common.config import load_settings, ParticConfig
+
+
+def _run_partic(cmd: List[str], desc: str, show_stderr: bool) -> None:
+    """Run the Partic compiler. With show_stderr, stream stderr live so a
+    hung compiler still shows its progress (subprocess.run buffers until exit,
+    which is useless when the JVM spins forever)."""
+    if not show_stderr:
+        run_cmd(cmd, desc=desc)
+        return
+    print(f"  [RUN] {desc}")
+    proc = subprocess.Popen(cmd, shell=True,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, bufsize=1)
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    rc = proc.wait()
+    if rc != 0:
+        raise BuildError(f"partic compiler failed with exit code {rc}")
 
 
 def _interactive_partic_setup() -> ParticConfig:
@@ -73,7 +95,7 @@ def compile_partic(
         cmd += ["--rtdir", pc.stdlib]
     cmd.append(str(stage))
 
-    run_cmd(cmd, desc=f"partic -> LLVM IR ({len(partic_files)} files)", show_stderr=show_stderr)
+    _run_partic(cmd, f"partic -> LLVM IR ({len(partic_files)} files)", show_stderr)
 
     ll_files = list(stage.rglob("*.ll")) + list(stage.parent.rglob("*.ll"))
     if not ll_files:

@@ -10,6 +10,11 @@ import kr.partix.kernel.paging.IPageTableManager;
 import kr.partix.kernel.arch.riscv.RISCVPageTableManager;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.timer.Timer;
+import kr.partix.kernel.fdt.FdtScanner;
+import kr.partix.kernel.boot.BootFail;
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.DeviceRegistry;
+import kr.partix.kernel.device.IDevice;
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.core.memory.Memory;
 
@@ -23,14 +28,29 @@ class RISCVArch implements IArch {
     private extern long fdt_get_pcie_base();
 
     RISCVArch() {
-        uart = new RISCVUART(fdt_get_uart_base());
-        pciIo = new RISCVPCIIO(fdt_get_pcie_base());
+        long uartBase = fdt_get_uart_base();
+        if (uartBase == 0) {
+            // UART 是调试底座，地址必须来自设备树；缺失 = 环境不完整，不能带 0 跑。
+            BootFail.fail("no UART base (device tree unavailable)");
+        }
+        uart = new RISCVUART(uartBase);
+        pciIo = new RISCVPCIIO(fdt_get_pcie_base());   // 0 = 无 PCI 主机控制器
         ic = new RISCVInterruptController();
         ptm = new RISCVPageTableManager();
     }
 
     void init() {
         uart.println("[dbg] arch.init");
+        // 设备树节点 → 设备注册中心
+        FdtScanner.scanAndRegister();
+        // PCI 控制器来自 DT（pci-host-ecam-generic 节点）：用其 reg 更新 ECAM
+        // 基址——PCI 枚举不再依赖 C 层定点查询。找不到则 PCI 保持不可用
+        // （构造时的 0），enumerate 会显式报告无 PCI。
+        IDevice pcie = DeviceRegistry.findByCompatible(BusType.DT, "pci-host-ecam-generic");
+        if (pcie != null && pcie.getResourceCount() > 0) {
+            pciIo.updateEcam(pcie.getResource(0).start);
+            uart.println("[dbg] pci ecam from DT");
+        }
         ic.init();
         uart.println("[dbg] ic.init done");
         long sbiErr = Timer.getSbiError();

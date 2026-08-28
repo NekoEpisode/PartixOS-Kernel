@@ -1,0 +1,8 @@
+package kr.partix.kernel.device;
+
+/** 总线类型（设备从哪来）。 */
+class BusType {
+    static final int PCI      = 1;
+    static final int PLATFORM = 2;   // 平台直连设备（UEFI GOP、固定 MMIO 等）
+    static final int DT       = 3;   // 设备树节点
+}

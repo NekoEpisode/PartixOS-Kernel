@@ -3,4 +3,7 @@ package kr.partix.kernel.io.pci;
 interface IPCIIO {
     int readConfig32(int bus, int slot, int func, int offset);
     void writeConfig32(int bus, int slot, int func, int offset, int value);
+
+    /** 是否存在可用的 PCI 主机控制器（ECAM 基址来自设备树，缺失时无 PCI）。 */
+    boolean isAvailable();
 }

@@ -14,6 +14,15 @@ class UefiFramebufferScreen implements IScreen {
     long getStride() -> gop_stride
     long getFramebufferSize() -> gop_height * gop_stride
 
+    /** UEFI GOP 是否提供了真实 framebuffer（无 GOP 时为 0）。 */
+    static boolean hasFramebuffer() -> gop_framebuffer != 0
+
+    /** GOP framebuffer 基址（供 GopDevice 资源描述使用）。 */
+    static long gopBase() -> gop_framebuffer
+
+    /** GOP framebuffer 大小（供 GopDevice 资源描述使用）。 */
+    static long gopSize() -> gop_height * gop_stride
+
     int* getFramebuffer() -> (int*) gop_framebuffer
 
     void blt(int* src, long x, long y, long w, long h) {

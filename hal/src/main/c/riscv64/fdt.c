@@ -74,13 +74,25 @@ void fdt_init(void *fdt_ptr) {
 
     if (!fdt_ptr) return;
 
-    fdt_header = (fdt_header_t *)fdt_ptr;
-    if (fdt_header->magic != FDT_MAGIC) return;
-    if (fdt_header->version < 16) return;
+    // FDT 是大端存储：header 字段必须逐字节大端读（be32），
+    // 不能直接解引用结构体字段——小端机器上 magic 会读成字节交换值，
+    // 偏移字段会读出放大 2^24 倍的错误值。
+    const uint8_t *base = (const uint8_t *)fdt_ptr;
+    if (be32(base) != FDT_MAGIC) return;
+    uint32_t version = be32(base + 20);
+    if (version < 16) return;
 
-    fdt_struct  = (const uint8_t *)fdt_ptr + fdt_header->off_dt_struct;
-    fdt_struct_size = fdt_header->size_dt_struct;
-    fdt_strings = (const char *)fdt_ptr + fdt_header->off_dt_strings;
+    fdt_header = (fdt_header_t *)fdt_ptr;   // 仅 fdt_get_base() 返回用
+    // FDT header 字段偏移：magic 0, totalsize 4, off_dt_struct 8,
+    // off_dt_strings 12, off_mem_rsvmap 16, version 20, ...,
+    // size_dt_strings 32, size_dt_struct 36
+    uint32_t off_struct  = be32(base + 8);
+    uint32_t off_strings = be32(base + 12);
+    uint32_t size_struct = be32(base + 36);
+
+    fdt_struct  = base + off_struct;
+    fdt_struct_size = size_struct;
+    fdt_strings = (const char *)(base + off_strings);
 
     const uint8_t *p   = fdt_struct;
     const uint8_t *end = p + fdt_struct_size;
@@ -155,17 +167,24 @@ void fdt_init(void *fdt_ptr) {
     }
 }
 
-/* Auto fallback to QEMU */
+/* FDT 基址（FdtScanner 使用；未初始化时为 0） */
+uint64_t fdt_get_base(void) {
+    return (uint64_t)fdt_header;
+}
+
+/* 平台设施基址：仅在 FDT 解析成功且节点存在时返回；0 = 未提供（无 fallback）。
+ * 调用方（Partic 侧）必须显式处理 0：环境不完整就报 BOOT FAILED，
+ * 绝不带着猜的地址继续跑。 */
 uint64_t fdt_get_uart_base(void) {
-    return fdt_uart_base ? fdt_uart_base : 0x10000000;
+    return fdt_uart_base;
 }
 
 uint64_t fdt_get_plic_base(void) {
-    return fdt_plic_base ? fdt_plic_base : 0x0C000000;
+    return fdt_plic_base;
 }
 
 uint64_t fdt_get_pcie_base(void) {
-    return fdt_pcie_base ? fdt_pcie_base : 0x30000000;
+    return fdt_pcie_base;
 }
 
 uint64_t fdt_get_timebase_freq(void) {

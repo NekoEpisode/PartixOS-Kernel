@@ -3,6 +3,8 @@ package kr.partix.kernel.io.drivers.display.virtio;
 import kr.partix.kernel.io.drivers.IDriver;
 import kr.partix.kernel.io.drivers.DriverType;
 import kr.partix.kernel.io.drivers.display.IDisplayDriver;
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.IDevice;
 import kr.partix.kernel.io.pci.PCIDevice;
 import kr.partix.kernel.io.pci.IPCIIO;
 import kr.partix.kernel.io.screen.IScreen;
@@ -13,9 +15,11 @@ import lang.partic.stdlib.core.memory.Memory;
 class VirtioGpuDriverTemplate implements IDisplayDriver {
     int getType() -> DriverType.DISPLAY
 
-    boolean match(PCIDevice device) -> device.vendorId == 0x1AF4 && device.deviceId == 0x1050
+    boolean match(IDevice device) ->
+        device.getBusType() == BusType.PCI
+        && device.getVendorId() == 0x1AF4 && device.getDeviceId() == 0x1050
 
-    IDriver create(PCIDevice device) -> new VirtioGpuDriver(device)
+    IDriver create(IDevice device) -> new VirtioGpuDriver((PCIDevice) device)
 
     IScreen[] getScreens() -> new IScreen[0]
 }
@@ -65,9 +69,11 @@ class VirtioGpuDriver implements IDisplayDriver {
 
     int getType() -> DriverType.DISPLAY
 
-    boolean match(PCIDevice d) -> d.vendorId == 0x1AF4 && d.deviceId == 0x1050
+    boolean match(IDevice d) ->
+        d.getBusType() == BusType.PCI
+        && d.getVendorId() == 0x1AF4 && d.getDeviceId() == 0x1050
 
-    IDriver create(PCIDevice d) -> new VirtioGpuDriver(d)
+    IDriver create(IDevice d) -> new VirtioGpuDriver((PCIDevice) d)
 
     IScreen[] getScreens() -> screens
 

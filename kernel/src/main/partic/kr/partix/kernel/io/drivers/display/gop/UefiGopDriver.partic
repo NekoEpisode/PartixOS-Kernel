@@ -1,0 +1,31 @@
+package kr.partix.kernel.io.drivers.display.gop;
+
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.display.IDisplayDriver;
+import kr.partix.kernel.io.screen.IScreen;
+import kr.partix.kernel.io.screen.UefiFramebufferScreen;
+import lang.partic.stdlib.additional.utils.StrUtils;
+
+/**
+ * UEFI GOP 显示驱动：匹配 GopDevice（平台设备），提供 UefiFramebufferScreen。
+ * 与 PCI 驱动走完全相同的注册/匹配机制——没有 fallback、没有特判。
+ */
+class UefiGopDriver implements IDisplayDriver {
+    int getType() -> DriverType.DISPLAY
+
+    // 注意：str 是 i8*，== 是指针比较；compatible 必须用 StrUtils.equals 内容比较
+    boolean match(IDevice d) ->
+        d.getBusType() == BusType.PLATFORM && StrUtils.equals(d.getCompatible(), "uefi-gop")
+
+    /** GOP 是平台单例——返回自身，不按设备创建实例。 */
+    IDriver create(IDevice d) -> this
+
+    IScreen[] getScreens() {
+        IScreen[] s = new IScreen[1];
+        s[0] = new UefiFramebufferScreen();
+        return s;
+    }
+}

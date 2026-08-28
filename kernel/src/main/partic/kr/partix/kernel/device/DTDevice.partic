@@ -1,0 +1,32 @@
+package kr.partix.kernel.device;
+
+/**
+ * 设备树节点设备描述。compatible 指向 FDT 内存中的字符串
+ * （FDT 内存生命周期 = 内核，不拷贝、不释放）。
+ */
+class DTDevice implements IDevice {
+    private final str compatible;
+    private final long addr;
+    private final long size;
+
+    DTDevice(str compatible, long addr, long size) {
+        this.compatible = compatible;
+        this.addr = addr;
+        this.size = size;
+    }
+
+    int getBusType() -> BusType.DT
+
+    long getVendorId() -> 0
+
+    long getDeviceId() -> 0
+
+    str getCompatible() -> compatible
+
+    int getResourceCount() -> 1
+
+    DeviceResource getResource(int index) -> new DeviceResource(
+            DeviceResource.MEM, addr, size)
+
+    str getName() -> compatible
+}

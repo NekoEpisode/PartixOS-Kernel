@@ -1,0 +1,41 @@
+package kr.partix.kernel.device;
+
+import lang.partic.stdlib.additional.utils.StrUtils;
+
+/**
+ * 设备注册中心：所有发现机制（PCI 枚举、平台代码、FDT 遍历）把设备
+ * 注册到这里，消费端（DriverRegistry/ScreenRegistry）只查这里。
+ * 设备对象由注册中心持有 = 内核生命周期，不释放。
+ */
+class DeviceRegistry {
+    private static final int SLOTS = 256;
+    private static IDevice[] devices = new IDevice[SLOTS];
+    private static int count;
+
+    static void register(IDevice dev) {
+        if (dev == null || count >= SLOTS) return;
+        devices[count] = dev;
+        count += 1;
+    }
+
+    static int getCount() -> count
+    static IDevice get(int index) -> devices[index]
+
+    static IDevice[] getAll() {
+        IDevice[] result = new IDevice[count];
+        for (int i = 0; i < count; i++) result[i] = devices[i];
+        return result;
+    }
+
+    /** 按总线类型 + compatible（内容比较）查找设备，找不到返回 null。 */
+    static IDevice findByCompatible(int busType, str compatible) {
+        for (int i = 0; i < count; i++) {
+            IDevice d = devices[i];
+            if (d == null) continue;
+            if (d.getBusType() == busType && StrUtils.equals(d.getCompatible(), compatible)) {
+                return d;
+            }
+        }
+        return null;
+    }
+}

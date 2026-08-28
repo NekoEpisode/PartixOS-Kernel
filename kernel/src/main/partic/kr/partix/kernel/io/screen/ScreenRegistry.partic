@@ -4,21 +4,18 @@ import kr.partix.kernel.io.drivers.IDriver;
 import kr.partix.kernel.io.drivers.DriverType;
 import kr.partix.kernel.io.drivers.DriverRegistry;
 import kr.partix.kernel.io.drivers.display.IDisplayDriver;
-import kr.partix.kernel.io.pci.PCIDevice;
-import kr.partix.kernel.io.pci.PCI;
+import lang.partic.stdlib.additional.utils.Optional;
 
 class ScreenRegistry {
     private static IScreen[] screens = new IScreen[16];
     private static int screenCount;
 
-    static void init(PCIDevice[] allDevices) {
-        int devCount = PCI.getDeviceCount();
-        PCIDevice[] valid = new PCIDevice[devCount];
-        for (int i = 0; i < devCount; i++) {
-            valid[i] = allDevices[i];
-        }
-
-        IDriver[] drivers = DriverRegistry.findAll(DriverType.DISPLAY, valid);
+    /**
+     * 从设备注册中心找 DISPLAY 驱动（PCI 驱动 + GOP 驱动同一机制）。
+     * 无屏是合法状态：getPrimary() 返回 empty，调用方显式处理。
+     */
+    static void init() {
+        IDriver[] drivers = DriverRegistry.findAll(DriverType.DISPLAY);
         for (int i = 0; i < drivers.length; i++) {
             if (drivers[i] == null) break;
             IScreen[] s = ((IDisplayDriver) drivers[i]).getScreens();
@@ -28,13 +25,14 @@ class ScreenRegistry {
                 }
             }
         }
-        if (screenCount == 0) {
-            screens[0] = new UefiFramebufferScreen();
-            screenCount = 1;
-        }
     }
 
     static int getScreenCount() -> screenCount
     static IScreen getScreen(int index) -> screens[index]
-    static IScreen getPrimary() -> screens[0]
+
+    /** 主显示器；无屏时返回 empty Optional（调用方显式检查，避免 NPE）。 */
+    static Optional<IScreen> getPrimary() {
+        IScreen s = screenCount == 0 ? null : screens[0];
+        return Optional.ofNullable(s);
+    }
 }

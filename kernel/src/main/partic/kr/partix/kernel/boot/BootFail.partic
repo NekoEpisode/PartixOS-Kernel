@@ -1,0 +1,32 @@
+package kr.partix.kernel.boot;
+
+import kr.partix.kernel.sys.System;
+
+/**
+ * BOOT FAILED：平台环境不完整（FDT 缺失、平台设备地址未知等）时终止启动。
+ *
+ * 原则：不带着猜的地址继续跑。此时平台 UART 可能根本不可用（它的地址
+ * 正是来自 FDT），所以错误通过 SBI legacy console（a7=1，OpenSBI 等
+ * SBI 固件标准提供）输出，然后永久 halt。
+ */
+class BootFail {
+    private extern void sbi_console_putchar(byte c);
+
+    static void fail(str reason) {
+        printStr("[BOOT FAILED] ");
+        printStr(reason);
+        printStr("\n");
+        System.stopInterrupts();
+        while (true) {
+            System.halt();
+        }
+    }
+
+    private static void printStr(str s) {
+        int i = 0;
+        while (s[i] != (byte) 0) {
+            sbi_console_putchar(s[i]);
+            i += 1;
+        }
+    }
+}

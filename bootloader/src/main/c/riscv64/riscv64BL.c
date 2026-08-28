@@ -35,6 +35,29 @@ static void memset(void* p, UINT8 v, UINTN n) {
     UINT8 *d = p; while (n--) *d++ = v;
 }
 
+static void print_u64_hex(EFI_SYSTEM_TABLE* st, UINT64 v) {
+    CHAR16 buf[19]; int i;
+    for (i = 0; i < 16; i++) {
+        UINT8 nib = (UINT8)((v >> (60 - i * 4)) & 0xF);
+        buf[i] = nib < 10 ? (CHAR16)('0' + nib) : (CHAR16)('a' + nib - 10);
+    }
+    buf[16] = L'\r'; buf[17] = L'\n'; buf[18] = 0;
+    st->ConOut->OutputString(st->ConOut, buf);
+}
+
+/* FDT config table GUID（EFI_FDT_TABLE_GUID / EFI_FDT_GUID，标准 0xe0 结尾）。
+ * 逐字节比较，不假设端序。 */
+static int guid_is_fdt(const EFI_GUID* g) {
+    const UINT8* b = (const UINT8*)g;
+    static const UINT8 expect[16] = {
+        0xd5,0x21,0xb6,0xb1, 0x9c,0xf1, 0xa5,0x41,
+        0x83,0x0b,0xd9,0x15, 0x2c,0x69, 0xaa, 0xe0
+    };
+    int i;
+    for (i = 0; i < 16; i++) if (b[i] != expect[i]) return 0;
+    return 1;
+}
+
 static EFI_STATUS setup_gop(EFI_BOOT_SERVICES* bs, BootInfo* info) {
     EFI_GUID g = EFI_GRAPHICS_OUTPUT_PROTOCOL_GUID;
     EFI_HANDLE* h = 0; UINTN c = 0;
@@ -120,20 +143,25 @@ static void __attribute__((noreturn)) exit_boot(EFI_BOOT_SERVICES* bs, EFI_HANDL
 EFI_STATUS EFIAPI efi_main(EFI_HANDLE h, EFI_SYSTEM_TABLE* st) {
     EFI_BOOT_SERVICES* bs = st->BootServices;
     BootInfo info;
+    memset(&info, 0, sizeof(info));   // 无 GOP 时 width/height/stride 必须为 0，不能留栈垃圾
 
     st->ConOut->OutputString(st->ConOut, L"Partix RV64\r\n");
 
     info.fdt_addr = 0;
     {
-        EFI_GUID fdtGuid = FDT_TABLE_GUID;
-        for (UINTN i = 0; i < st->NumberOfTableEntries; i++) {
-            UINT32* a = (UINT32*)&st->ConfigurationTable[i].VendorGuid;
-            UINT32* b = (UINT32*)&fdtGuid;
-            if (a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]) {
+        UINTN i;
+        for (i = 0; i < st->NumberOfTableEntries; i++) {
+            if (guid_is_fdt(&st->ConfigurationTable[i].VendorGuid)) {
                 info.fdt_addr = st->ConfigurationTable[i].VendorTable;
                 break;
             }
         }
+    }
+    if (info.fdt_addr) {
+        st->ConOut->OutputString(st->ConOut, L"[BL] FDT found 0x");
+        print_u64_hex(st, (UINT64)info.fdt_addr);
+    } else {
+        st->ConOut->OutputString(st->ConOut, L"[BL] FDT NOT found\r\n");
     }
 
     setup_gop(bs, &info);

@@ -1,6 +1,13 @@
 package kr.partix.kernel.io.pci;
 
-class PCIDevice {
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.DeviceResource;
+import kr.partix.kernel.device.IDevice;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+class PCIDevice implements IDevice {
     int bus;
     int slot;
     int func;
@@ -16,4 +23,35 @@ class PCIDevice {
     }
 
     boolean isMultiFunction() -> (headerType & 0x80) != 0
+
+    // ── IDevice ──
+
+    int getBusType() -> BusType.PCI
+
+    long getVendorId() -> vendorId
+
+    long getDeviceId() -> deviceId
+
+    str getCompatible() -> null
+
+    int getResourceCount() -> 1
+
+    /** BAR0（去掉低 4 位标志）作为首个 MMIO 资源；size 未知时驱动自行探测。 */
+    DeviceResource getResource(int index) -> new DeviceResource(
+            DeviceResource.MEM, (long) bar[0] & 0xFFFFFFF0L, 0)
+
+    str getName() {
+        StrBuilder sb = new StrBuilder();
+        sb.append("pci-");
+        str v = StrUtils.toHex(vendorId);
+        sb.append(v);
+        Memory.free(v);
+        sb.append("-");
+        str d = StrUtils.toHex(deviceId);
+        sb.append(d);
+        Memory.free(d);
+        str out = sb.build();
+        sb.dispose();
+        return out;
+    }
 }

@@ -47,6 +47,16 @@ OVMF_VARS_PATHS = {
     ],
 }
 
+# U-Boot 单镜像固件（-bios）候选路径，仅供 setup 时显式选择，不自动采用。
+U_BOOT_PATHS = {
+    "riscv64": [
+        "/usr/lib/u-boot/qemu-riscv64_smode/u-boot.bin",
+        "/usr/share/u-boot/u-boot.bin",
+        "/usr/lib/riscv64-linux-gnu/u-boot.bin",
+        "build/u-boot.bin",
+    ],
+}
+
 QEMU_PER_ARCH = {
     "x86_64":   "qemu-system-x86_64",
     "aarch64":  "qemu-system-aarch64",
@@ -66,6 +76,8 @@ class QemuRunConfig:
     memory: str
     ovmf_code: str
     ovmf_vars: str
+    bios: str
+    kernel: str
     extra_args: str
 
 
@@ -104,8 +116,46 @@ def _interactive_qemu_setup(arch: str) -> QemuRunConfig:
     if override:
         qemu = override
 
-    code = _pick_path("OVMF_CODE", OVMF_CODE_PATHS.get(arch, []))
-    ovmf_vars = _pick_path("OVMF_VARS", OVMF_VARS_PATHS.get(arch, []))
+    code = ""
+    ovmf_vars = ""
+    bios = ""
+
+    if arch == "riscv64":
+        print(f"\n  firmware:")
+        print(f"    [1] EDK2 (UEFI, pflash 双镜像)  — FDT 依赖固件装 config table")
+        print(f"    [2] U-Boot (随 EFI payload 传设备树)")
+        while True:
+            try:
+                choice = input("  > ").strip()
+                if choice == "2":
+                    img = _pick_path("U-Boot image", U_BOOT_PATHS.get(arch, []))
+                    if img:
+                        print(f"  U-Boot image type:")
+                        print(f"    [1] S-mode（需 OpenSBI 先行；QEMU 内置即可：-bios default + -kernel）")
+                        print(f"    [2] 完整单镜像（内含固件/OpenSBI：直接 -bios）")
+                        while True:
+                            try:
+                                t = input("  > ").strip()
+                                if t == "1":
+                                    kernel = img
+                                    break
+                                if t == "" or t == "2":
+                                    bios = img
+                                    break
+                            except (ValueError, KeyboardInterrupt):
+                                pass
+                            print("  invalid")
+                    break
+                if choice == "" or choice == "1":
+                    code = _pick_path("OVMF_CODE", OVMF_CODE_PATHS.get(arch, []))
+                    ovmf_vars = _pick_path("OVMF_VARS", OVMF_VARS_PATHS.get(arch, []))
+                    break
+            except (ValueError, KeyboardInterrupt):
+                pass
+            print("  invalid")
+    else:
+        code = _pick_path("OVMF_CODE", OVMF_CODE_PATHS.get(arch, []))
+        ovmf_vars = _pick_path("OVMF_VARS", OVMF_VARS_PATHS.get(arch, []))
 
     memory_options = ["128M", "256M", "512M", "1G", "2G"]
     print(f"\n  memory:")
@@ -136,6 +186,8 @@ def _interactive_qemu_setup(arch: str) -> QemuRunConfig:
         memory=memory,
         ovmf_code=code,
         ovmf_vars=ovmf_vars,
+        bios=bios,
+        kernel=kernel,
         extra_args=extra,
     )
 
@@ -201,7 +253,32 @@ def launch_qemu(run: QemuRunConfig, disk: Path, arch: str = "x86_64", extra: str
 
     is_riscv = arch == "riscv64"
 
-    if is_riscv:
+    # 用户显式指定的固件：配置 bios/kernel 字段，或 --qemu-args 里传 -bios
+    bios_in_args = "-bios" in (run.extra_args + " " + extra).split()
+    bios_path = run.bios if (run.bios and Path(run.bios).exists()) else ""
+
+    if is_riscv and (bios_path or run.kernel or bios_in_args):
+        # U-Boot 等非 pflash 固件：
+        #   bios   非空 → -bios <bios>（完整单镜像固件）
+        #   kernel 非空 → -kernel <kernel>（S-mode U-Boot；bios 为空时用 QEMU
+        #                内置 OpenSBI：-bios default）
+        # （-bios 若来自 --qemu-args，由下面的 user_args 合并逻辑追加）
+        fw = []
+        if bios_path:
+            fw += ["-bios", bios_path]
+        elif run.kernel:
+            fw += ["-bios", "default"]
+        if run.kernel:
+            fw += ["-kernel", run.kernel]
+        cmd = [
+            run.qemu_binary, "-M", "virt",
+            *fw,
+            "-m", run.memory,
+            "-drive", f"file={disk},format=raw,if=none,id=drive0",
+            "-device", "virtio-blk-device,drive=drive0",
+            "-device", "virtio-gpu-pci",
+        ]
+    elif is_riscv:
         vars_fd = Path("build") / "partix_VARS.fd"
         if run.ovmf_vars and Path(run.ovmf_vars).exists() and not vars_fd.exists():
             shutil.copy2(run.ovmf_vars, vars_fd)
