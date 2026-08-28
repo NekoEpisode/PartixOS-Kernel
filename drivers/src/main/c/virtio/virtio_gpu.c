@@ -18,6 +18,12 @@ int virtio_gpu_dev_size(void) {
     return (int)sizeof(virtio_gpu_dev_t);
 }
 
+static int gpu_timeout_count = 0;
+
+int virtio_gpu_timeout_count(void) {
+    return gpu_timeout_count;
+}
+
 void virtio_gpu_dev_init(virtio_gpu_dev_t *dev,
                          uint64_t common_phys, uint64_t notify_phys,
                          uint64_t device_phys,
@@ -61,7 +67,10 @@ static int send_cmd(virtio_gpu_dev_t *dev, uint32_t cmd_type,
         uint32_t len;
         int id = virtq_get_used(q, &len);
         if (id >= 0) break;
-        if (g_tick >= deadline) return -1;
+        if (g_tick >= deadline) {
+            gpu_timeout_count++;
+            return -1;
+        }
     }
 
     return (int)dev->respbuf->type;

@@ -12,6 +12,8 @@ import kr.partix.kernel.sys.System;
 import kr.partix.kernel.main.BspKrMain;
 import kr.partix.kernel.timer.Timer;
 import kr.partix.kernel.log.StartupLogger;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.core.memory.Memory;
 
 class VirtioGpuDriverTemplate implements IDisplayDriver {
@@ -57,6 +59,7 @@ class VirtioGpuDriver implements IDisplayDriver {
                                    long used_phys, int size);
 
     private extern int virtio_gpu_get_display_info(long dev, long infoOut);
+    private extern int virtio_gpu_timeout_count();
 
     private extern void virtio_pci_set_status(long common, byte status);
     private extern byte virtio_pci_get_status(long common);
@@ -82,7 +85,7 @@ class VirtioGpuDriver implements IDisplayDriver {
 
     IDriver create(IDevice d) -> new VirtioGpuDriver((PCIDevice) d)
 
-    IScreen[] getScreens() -> screens
+    IScreen[] getScreens() -> screens == null ? new IScreen[0] : screens
 
     private void initDevice() {
         StartupLogger.info("virtio-gpu: init start");
@@ -143,8 +146,7 @@ class VirtioGpuDriver implements IDisplayDriver {
         if (commonPhys == 0) return;
 
         virtio_pci_set_status(commonPhys, (byte)0);
-        // 等待复位完成（规范：status 读回 0 才算复位完成）。U-Boot 自动启动
-        // （bootflow）会先碰 virtio 设备，遗留状态不确认复位就继续会卡死。
+        // 等待复位完成
         long resetDeadline = Timer.getTicks() + Timer.TICK_HZ / 2;
         while (Timer.getTicks() < resetDeadline) {
             if (virtio_pci_get_status(commonPhys) == 0) break;
@@ -196,7 +198,27 @@ class VirtioGpuDriver implements IDisplayDriver {
         int numScanouts = System.read32(devicePhys + 8);
         long infoBuf = Memory.malloc(16 * 3 * 4);
         StartupLogger.info("virtio-gpu: requesting display info");
-        virtio_gpu_get_display_info(devStruct, infoBuf);
+        int di = virtio_gpu_get_display_info(devStruct, infoBuf);
+        int timeouts = virtio_gpu_timeout_count();
+        if (di < 0 || timeouts > 0) {
+            // GPU 不响应 不添加 screen，由调用方显式处理无屏
+            if (di < 0) {
+                StartupLogger.warn("virtio-gpu: device not responding (display info timed out)");
+            } else {
+                StrBuilder warnSb = new StrBuilder();
+                warnSb.append("virtio-gpu: ");
+                str t = StrUtils.toDec(timeouts);
+                warnSb.append(t);
+                Memory.free(t);
+                warnSb.append(" command(s) timed out - GPU not responding, no screen added");
+                str warnMsg = warnSb.build();
+                StartupLogger.warn(warnMsg);
+                Memory.free(warnMsg);
+                warnSb.dispose();
+            }
+            Memory.free((long) infoBuf);
+            return;
+        }
         StartupLogger.info("virtio-gpu: display info ok");
 
         screens = new IScreen[numScanouts];
