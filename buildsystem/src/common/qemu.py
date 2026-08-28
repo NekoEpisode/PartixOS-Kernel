@@ -206,29 +206,42 @@ def create_disk_image(efi_path: Path, disk_path: Path, size_mb: int = 64,
         ["dd", "if=/dev/zero", f"of={disk_path}", "bs=1M", f"count={size_mb}"],
         desc=f"create {size_mb}M disk image",
     )
+
+    # GPT + 单个 ESP 分区（FAT32，起始 2048 扇区 = 1MiB）。
+    # 分区表是 U-Boot bootflow / EDK2 自动发现启动项的必需品（superfloppy 只能手动 load）。
+    part_offset = 2048  # 扇区
+    if shutil.which("sgdisk"):
+        run_cmd(
+            ["sgdisk", "-n", f"1:{part_offset}:0", "-t", "1:ef00", "-c", "1:ESP", str(disk_path)],
+            desc="create GPT with ESP partition",
+        )
+    else:
+        raise BuildError("need 'sgdisk' (gdisk) to create the ESP partition")
+
     run_cmd(
-        ["mkfs.fat", "-F", "32", str(disk_path)],
-        desc="format FAT32",
+        ["mkfs.fat", "-F", "32", f"--offset={part_offset}", str(disk_path)],
+        desc="format FAT32 ESP",
     )
 
     if shutil.which("mcopy"):
+        dev = f"{disk_path}@@{part_offset}s"
         run_cmd(
-            ["mmd", "-i", str(disk_path), "::/EFI"],
+            ["mmd", "-i", dev, "::/EFI"],
             desc="create EFI dir",
         )
         run_cmd(
-            ["mmd", "-i", str(disk_path), "::/EFI/BOOT"],
+            ["mmd", "-i", dev, "::/EFI/BOOT"],
             desc="create EFI/BOOT dir",
         )
         run_cmd(
-            ["mcopy", "-i", str(disk_path), str(efi_path), f"::/EFI/BOOT/{efi_name}"],
+            ["mcopy", "-i", dev, str(efi_path), f"::/EFI/BOOT/{efi_name}"],
             desc=f"copy {efi_name}",
         )
 
         if extra_files:
             for dest_name, src_path in extra_files.items():
                 run_cmd(
-                    ["mcopy", "-i", str(disk_path), str(src_path), f"::/{dest_name}"],
+                    ["mcopy", "-i", dev, str(src_path), f"::/{dest_name}"],
                     desc=f"copy {dest_name}",
                 )
     else:
@@ -236,7 +249,8 @@ def create_disk_image(efi_path: Path, disk_path: Path, size_mb: int = 64,
         mnt = Path("/tmp/partix_mnt")
         mnt.mkdir(exist_ok=True)
         try:
-            run_cmd(["sudo", "mount", "-o", "loop", str(disk_path), str(mnt)], desc="mount disk")
+            run_cmd(["sudo", "mount", "-o", f"loop,offset={part_offset * 512}", str(disk_path), str(mnt)],
+                    desc="mount disk")
             efi_dir = mnt / "EFI" / "BOOT"
             efi_dir.mkdir(parents=True, exist_ok=True)
             shutil.copy2(efi_path, efi_dir / "BOOTX64.EFI")

@@ -12,8 +12,12 @@ import lang.partic.stdlib.core.memory.Memory;
 
 class DeviceInit {
     static void init() {
+        StartupLogger.info("device init: enumerating PCI...");
         PCI.enumerate();
+        StartupLogger.info("device init: PCI enumerated");
+        StartupLogger.info("device init: probing display drivers...");
         ScreenRegistry.init();
+        StartupLogger.info("device init: display drivers ready");
 
         int devCount = DeviceRegistry.getCount();
         for (int i = 0; i < devCount; i++) {

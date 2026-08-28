@@ -9,7 +9,9 @@ import lang.partic.stdlib.core.memory.Memory;
 
 class DiskInit {
     static void init() {
+        StartupLogger.info("disk init: probing storage drivers...");
         DiskRegistry.init();
+        StartupLogger.info("disk init: storage drivers ready");
         int count = DiskRegistry.getCount();
         if (count == 0) {
             StartupLogger.warn("no disks found");

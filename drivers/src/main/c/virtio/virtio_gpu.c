@@ -54,10 +54,14 @@ static int send_cmd(virtio_gpu_dev_t *dev, uint32_t cmd_type,
     volatile uint32_t *n = (volatile uint32_t *)((uint8_t *)dev->notify + notify_off);
     *n = 0;
 
+    // 等设备响应 used ring；超时（约 1 秒，200Hz tick）返回错误而不是死循环
+    extern volatile unsigned long g_tick;
+    unsigned long deadline = g_tick + 200;
     while (1) {
         uint32_t len;
         int id = virtq_get_used(q, &len);
         if (id >= 0) break;
+        if (g_tick >= deadline) return -1;
     }
 
     return (int)dev->respbuf->type;

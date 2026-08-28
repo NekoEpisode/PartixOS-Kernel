@@ -10,6 +10,8 @@ import kr.partix.kernel.io.pci.IPCIIO;
 import kr.partix.kernel.io.screen.IScreen;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.timer.Timer;
+import kr.partix.kernel.log.StartupLogger;
 import lang.partic.stdlib.core.memory.Memory;
 
 class VirtioGpuDriverTemplate implements IDisplayDriver {
@@ -57,6 +59,7 @@ class VirtioGpuDriver implements IDisplayDriver {
     private extern int virtio_gpu_get_display_info(long dev, long infoOut);
 
     private extern void virtio_pci_set_status(long common, byte status);
+    private extern byte virtio_pci_get_status(long common);
     private extern void virtio_pci_select_queue(long common, int idx);
     private extern void virtio_pci_set_queue(long common, long desc,
                                              long driver, long device);
@@ -82,6 +85,7 @@ class VirtioGpuDriver implements IDisplayDriver {
     IScreen[] getScreens() -> screens
 
     private void initDevice() {
+        StartupLogger.info("virtio-gpu: init start");
         IPCIIO pciio = BspKrMain.arch.getPciIo();
         int bus = device.bus;
         int slot = device.slot;
@@ -109,6 +113,7 @@ class VirtioGpuDriver implements IDisplayDriver {
                 bi++;
             }
         }
+        StartupLogger.info("virtio-gpu: bars read");
 
         int capHeader = pciio.readConfig32(bus, slot, func, 0x34);
         int cap = capHeader & 0xFF;
@@ -134,10 +139,16 @@ class VirtioGpuDriver implements IDisplayDriver {
 
             cap = capNext;
         }
-
+        StartupLogger.info("virtio-gpu: caps scanned");
         if (commonPhys == 0) return;
 
         virtio_pci_set_status(commonPhys, (byte)0);
+        // 等待复位完成（规范：status 读回 0 才算复位完成）。U-Boot 自动启动
+        // （bootflow）会先碰 virtio 设备，遗留状态不确认复位就继续会卡死。
+        long resetDeadline = Timer.getTicks() + Timer.TICK_HZ / 2;
+        while (Timer.getTicks() < resetDeadline) {
+            if (virtio_pci_get_status(commonPhys) == 0) break;
+        }
         virtio_pci_set_status(commonPhys, (byte)VIRTIO_STATUS_ACKNOWLEDGE);
         virtio_pci_set_status(commonPhys, (byte)(VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER));
 
@@ -180,10 +191,13 @@ class VirtioGpuDriver implements IDisplayDriver {
         virtio_pci_set_status(commonPhys,
             (byte)(VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER |
                    VIRTIO_STATUS_FEATURES_OK | VIRTIO_STATUS_DRIVER_OK));
+        StartupLogger.info("virtio-gpu: device ready");
 
         int numScanouts = System.read32(devicePhys + 8);
         long infoBuf = Memory.malloc(16 * 3 * 4);
+        StartupLogger.info("virtio-gpu: requesting display info");
         virtio_gpu_get_display_info(devStruct, infoBuf);
+        StartupLogger.info("virtio-gpu: display info ok");
 
         screens = new IScreen[numScanouts];
         for (int i = 0; i < numScanouts; i++) {

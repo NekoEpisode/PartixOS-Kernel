@@ -11,6 +11,7 @@ import kr.partix.kernel.io.pci.IPCIIO;
 import kr.partix.kernel.main.BspKrMain;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.timer.Timer;
+import kr.partix.kernel.log.StartupLogger;
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.core.memory.Memory;
@@ -57,10 +58,12 @@ class AhciDriver implements IDiskDriver {
     private void initHba() {
         // HBA 复位：清掉固件（UEFI/EDK2）留下的引擎状态，否则残留的
         // 命令槽/引擎状态会让 QEMU（和真实硬件）忽略新命令。
+        StartupLogger.info("ahci: HBA reset");
         System.write32(abar + 4, 1);                    // GHC.HR
         AhciWait.clear(abar + 4, 1);                    // HR 自清
         System.write32(abar + 4, 0x80000000);           // GHC.AE
         int nports = System.read32(abar) & 0x1F;
+        StartupLogger.info("ahci: probing ports");
         for (int p = 0; p < nports; p++) {
             long base = abar + 0x100 + (long) p * 0x80;
             // 只处理有设备的端口——空端口复位后 DET 永远不到 3，等满超时是白等
@@ -104,6 +107,14 @@ class AhciPortDisk implements IDisk {
     }
 
     boolean identify() {
+        StrBuilder dbgSb = new StrBuilder();
+        dbgSb.append("ahci: identify port ");
+        dbgSb.append(StrUtils.toDec(portNo));
+        dbgSb.append(" start");
+        str dbgMsg = dbgSb.build();
+        StartupLogger.info(dbgMsg);
+        Memory.free(dbgMsg);
+        dbgSb.dispose();
         System.write32(port + 0x00, (int) cmdList);
         System.write32(port + 0x04, (int) (cmdList >>> 32));
         System.write32(port + 0x08, (int) fis);

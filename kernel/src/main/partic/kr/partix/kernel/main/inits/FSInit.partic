@@ -6,6 +6,7 @@ import kr.partix.kernel.fs.vfs.FileMode;
 import kr.partix.kernel.fs.vfs.VFS;
 import kr.partix.kernel.io.disk.DiskRegistry;
 import kr.partix.kernel.io.disk.IDisk;
+import kr.partix.kernel.io.disk.PartitionDisk;
 import kr.partix.kernel.log.StartupLogger;
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
@@ -18,13 +19,16 @@ class FSInit {
             return;
         }
 
-        IDisk disk0 = DiskRegistry.get(0);
-        Fat32 fat = new Fat32(disk0);
+        IDisk raw = DiskRegistry.get(0);
+        // GPT 分区：挂载第一个分区；无分区表则回退整盘（旧 superfloppy 镜像）
+        IDisk disk = PartitionDisk.findFirst(raw);
+        if (disk == null) disk = raw;
+        Fat32 fat = new Fat32(disk);
         if (!fat.isValid()) {
             StartupLogger.error("no FAT32 filesystem on disk 0");
             return;
         }
-        VFS.mount("/", disk0, fat);
+        VFS.mount("/", disk, fat);
         StartupLogger.info("filesystem: FAT32 mounted at /");
 
         DEntry[] entries = VFS.ls("/");
