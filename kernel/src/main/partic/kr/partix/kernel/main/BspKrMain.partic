@@ -4,6 +4,7 @@ import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.Optional;
 import lang.partic.stdlib.core.memory.Memory;
 import lang.partic.stdlib.core.exception.exception.Exception;
+import lang.partic.stdlib.core.exception.Throwable;
 import kr.partix.kernel.arch.ArchRegistry;
 import kr.partix.kernel.arch.IArch;
 import kr.partix.kernel.main.inits.EventInit;
@@ -15,6 +16,7 @@ import kr.partix.kernel.io.screen.utils.ScreenUtils;
 import kr.partix.kernel.io.screen.utils.RGB;
 import kr.partix.kernel.utils.Point;
 import kr.partix.kernel.log.StartupLogger;
+import kr.partix.kernel.exception.KernelNullPointerException;
 
 class BspKrMain {
     static IArch arch;
@@ -68,9 +70,42 @@ class BspKrMain {
             }
             Memory.free((long) optScreen);
 
-            while (true) {}
+            throw new KernelNullPointerException("Test NPE", null);
+
+            // while (true) {}
         } catch (Exception e) {
+            arch.getUart().println("++++++++++++++++++");
             arch.getUart().println("!!! EXCEPTION !!!");
+            StrBuilder sb = new StrBuilder();
+            sb.append("Why: ");
+            sb.append(e.getMessage());
+            str builded = sb.build();
+            arch.getUart().println(builded);
+            Memory.free(builded);
+            sb.dispose();
+
+            int i = 1;
+            Throwable whatNow = e;
+            while (true) {
+                if (whatNow.getCause() == null) break;
+                whatNow = whatNow.getCause();
+                for (int j = 0; j < i; j++) {
+                    arch.getUart().print("  ");
+                }
+                StrBuilder sb1 = new StrBuilder();
+                sb1.append("CauseMsg: ");
+                sb1.append(whatNow.getMessage());
+                str builded1 = sb1.build();
+                arch.getUart().println(builded1);
+                Memory.free(builded1);
+                sb1.dispose();
+                whatNow.dispose();
+                i++;
+            }
+            e.dispose();
+            arch.getUart().println("++++++++++++++++++");
+
+            System.panic();
 
             while (true) {}
         }
