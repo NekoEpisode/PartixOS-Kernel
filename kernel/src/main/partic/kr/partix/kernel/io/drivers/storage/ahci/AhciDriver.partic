@@ -17,6 +17,8 @@ import lang.partic.stdlib.core.memory.Memory;
 class AhciDriverTemplate implements IDiskDriver {
     int getType() -> DriverType.STORAGE
 
+    str description() -> "AHCI SATA driver - provides block storage"
+
     boolean match(IDevice d) {
         if (d.getBusType() != BusType.PCI) return false;
         PCIDevice p = (PCIDevice) d;
@@ -33,6 +35,8 @@ class AhciDriver implements IDiskDriver {
     private AhciPortDisk[] disks = new AhciPortDisk[MAX_PORTS];
     private int diskCount;
     private long abar;
+
+    str description() -> "AHCI SATA driver - provides block storage"
 
     AhciDriver(PCIDevice dev) {
         IPCIIO io = BspKrMain.arch.getPciIo();

@@ -1,0 +1,51 @@
+package kr.partix.kernel.log;
+
+import kr.partix.kernel.exception.AlreadyStartupException;
+import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+import kr.partix.kernel.timer.Timer;
+
+class StartupLogger {
+    private static boolean isStartupCompleted = false;
+
+    static void info(str msg) {
+        log("INFO", msg);
+    }
+
+    static void warn(str msg) {
+        log("WARN", msg);
+    }
+
+    static void error(str msg) {
+        log("ERROR", msg);
+    }
+
+    private static void log(str level, str msg) {
+        StrBuilder sb = new StrBuilder();
+        sb.append("STARTUP - [");
+        sb.append(StrUtils.longToStr((Timer.getTicks() * ((long) (1000 / Timer.TICK_HZ)))));
+        sb.append("ms] [");
+        sb.append(level);
+        sb.append("] ");
+        sb.append(msg);
+        str concated = sb.build();
+        output(concated);
+        Memory.free(concated);
+        sb.dispose();
+    }
+
+    static void completed() {
+        isStartupCompleted = true;
+    }
+
+    static boolean available() -> !isStartupCompleted
+
+    private static void output(str msg) {
+        if (isStartupCompleted) {
+            throw new AlreadyStartupException("Already started!", null);
+        }
+        BspKrMain.arch.getUart().println(msg);
+    }
+}

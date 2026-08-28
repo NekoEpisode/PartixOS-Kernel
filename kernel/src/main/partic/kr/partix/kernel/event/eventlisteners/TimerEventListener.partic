@@ -12,7 +12,7 @@ import lang.partic.stdlib.core.memory.Memory;
 
 class TimerEventListener implements IEventListener {
     int onEvent(AEvent event) {
-        if (event instanceof TimerEvent) {
+        /*if (event instanceof TimerEvent) {
             TimerEvent te = (TimerEvent) event;
             long ticks = te.getTicks();
             if (ticks % Timer.TICK_HZ == 0) {
@@ -32,7 +32,7 @@ class TimerEventListener implements IEventListener {
                 Memory.free(out);
                 sb.dispose();
             }
-        }
+        }*/
         return EventHandleResult.HANDLE_OK;
     }
 }

@@ -1,0 +1,18 @@
+package kr.partix.kernel.main.inits;
+
+import kr.partix.kernel.event.EventBus;
+import kr.partix.kernel.event.EventId;
+import kr.partix.kernel.event.eventlisteners.NullPointerEventListener;
+import kr.partix.kernel.event.eventlisteners.TestEventListener;
+import kr.partix.kernel.event.eventlisteners.TimerEventListener;
+import kr.partix.kernel.event.eventlisteners.UnknownInterruptEventListener;
+
+class EventInit {
+    static void init() {
+        EventBus.init();
+        EventBus.registerEventListener(EventId.INTERRUPT_EVENT, new UnknownInterruptEventListener());
+        EventBus.registerEventListener(EventId.TEST_EVENT, new TestEventListener());
+        EventBus.registerEventListener(EventId.TIMER_EVENT, new TimerEventListener());
+        EventBus.registerEventListener(EventId.TRIGGER_NULL_POINTER_EVENT, new NullPointerEventListener());
+    }
+}

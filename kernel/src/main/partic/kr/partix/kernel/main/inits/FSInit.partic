@@ -1,0 +1,69 @@
+package kr.partix.kernel.main.inits;
+
+import kr.partix.kernel.fs.fat32.Fat32;
+import kr.partix.kernel.fs.vfs.DEntry;
+import kr.partix.kernel.fs.vfs.FileMode;
+import kr.partix.kernel.fs.vfs.VFS;
+import kr.partix.kernel.io.disk.DiskRegistry;
+import kr.partix.kernel.io.disk.IDisk;
+import kr.partix.kernel.log.StartupLogger;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+class FSInit {
+    static void init() {
+        if (DiskRegistry.getCount() == 0) {
+            StartupLogger.warn("no disk available, filesystem skipped");
+            return;
+        }
+
+        IDisk disk0 = DiskRegistry.get(0);
+        Fat32 fat = new Fat32(disk0);
+        if (!fat.isValid()) {
+            StartupLogger.error("no FAT32 filesystem on disk 0");
+            return;
+        }
+        VFS.mount("/", disk0, fat);
+        StartupLogger.info("filesystem: FAT32 mounted at /");
+
+        DEntry[] entries = VFS.ls("/");
+        for (int i = 0; i < entries.length; i++) {
+            DEntry e = entries[i];
+            if (e == null) continue;
+            StrBuilder sb = new StrBuilder();
+            sb.append("  /");
+            sb.append(e.name);
+            if (e.inode != null && e.inode.isDir()) sb.append("/");
+            str msg = sb.build();
+            StartupLogger.info(msg);
+            Memory.free(msg);
+            sb.dispose();
+        }
+
+        int fd = VFS.open("/KERNEL.ELF", FileMode.READ);
+        if (fd > 0) {
+            byte[] hdr = new byte[16];
+            int n = VFS.read(fd, hdr, 16);
+            StrBuilder sb = new StrBuilder();
+            sb.append("read /KERNEL.ELF: ");
+            str ns = StrUtils.toDec(n);
+            sb.append(ns);
+            Memory.free(ns);
+            sb.append(" bytes, magic=");
+            for (int i = 0; i < 4; i++) {
+                str h = StrUtils.toHex((long) hdr[i] & 0xFFL);
+                sb.append(h);
+                Memory.free(h);
+            }
+            str msg = sb.build();
+            StartupLogger.info(msg);
+            Memory.free(msg);
+            sb.dispose();
+            Memory.free((long) hdr);
+            VFS.close(fd);
+        } else {
+            StartupLogger.error("open /KERNEL.ELF failed");
+        }
+    }
+}

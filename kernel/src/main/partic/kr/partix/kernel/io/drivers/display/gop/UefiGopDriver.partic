@@ -16,6 +16,8 @@ import lang.partic.stdlib.additional.utils.StrUtils;
 class UefiGopDriver implements IDisplayDriver {
     int getType() -> DriverType.DISPLAY
 
+    str description() -> "UEFI GOP driver - provides framebuffer screen"
+
     // 注意：str 是 i8*，== 是指针比较；compatible 必须用 StrUtils.equals 内容比较
     boolean match(IDevice d) ->
         d.getBusType() == BusType.PLATFORM && StrUtils.equals(d.getCompatible(), "uefi-gop")

@@ -1,0 +1,15 @@
+package kr.partix.kernel.main;
+
+import kr.partix.kernel.main.inits.DriverInit;
+import kr.partix.kernel.main.inits.DeviceInit;
+import kr.partix.kernel.main.inits.DiskInit;
+import kr.partix.kernel.main.inits.FSInit;
+
+class SystemInit {
+    static void init() {
+        DriverInit.init();
+        DeviceInit.init();
+        DiskInit.init();
+        FSInit.init();
+    }
+}

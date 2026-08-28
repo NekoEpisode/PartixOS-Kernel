@@ -2,6 +2,9 @@ package kr.partix.kernel.io.drivers;
 
 import kr.partix.kernel.device.DeviceRegistry;
 import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.log.StartupLogger;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.core.memory.Memory;
 
 class DriverRegistry {
     private static final int SLOTS = 1024;
@@ -12,6 +15,15 @@ class DriverRegistry {
     static void register(IDriver d) {
         templates[registered] = d;
         registered++;
+        if (StartupLogger.available()) {
+            StrBuilder sb = new StrBuilder();
+            sb.append("Registered driver: ");
+            sb.append(d.description());
+            str builded = sb.build();
+            StartupLogger.info(builded);
+            Memory.free(builded);
+            sb.dispose();
+        }
     }
 
     /**

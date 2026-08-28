@@ -1,0 +1,21 @@
+package kr.partix.kernel.main.inits;
+
+import kr.partix.kernel.device.DeviceRegistry;
+import kr.partix.kernel.io.drivers.DriverRegistry;
+import kr.partix.kernel.io.drivers.display.gop.GopDevice;
+import kr.partix.kernel.io.drivers.display.gop.UefiGopDriver;
+import kr.partix.kernel.io.drivers.display.virtio.VirtioGpuDriverTemplate;
+import kr.partix.kernel.io.drivers.storage.ahci.AhciDriverTemplate;
+import kr.partix.kernel.io.screen.UefiFramebufferScreen;
+
+class DriverInit {
+    static void init() {
+        // 注册日志由 DriverRegistry.register 自带
+        DriverRegistry.register(new VirtioGpuDriverTemplate());
+        DriverRegistry.register(new AhciDriverTemplate());
+        if (UefiFramebufferScreen.hasFramebuffer()) {
+            DeviceRegistry.register(new GopDevice());
+            DriverRegistry.register(new UefiGopDriver());
+        }
+    }
+}

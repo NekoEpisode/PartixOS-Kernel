@@ -10,4 +10,7 @@ interface IDriver {
 
     /** 为匹配的设备创建驱动实例。 */
     IDriver create(IDevice device);
+
+    /** 这个驱动主要是做什么的 的说明 **/
+    str description();
 }

@@ -1,0 +1,34 @@
+package kr.partix.kernel.main.inits;
+
+import kr.partix.kernel.io.disk.DiskRegistry;
+import kr.partix.kernel.io.disk.IDisk;
+import kr.partix.kernel.log.StartupLogger;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+class DiskInit {
+    static void init() {
+        DiskRegistry.init();
+        int count = DiskRegistry.getCount();
+        if (count == 0) {
+            StartupLogger.warn("no disks found");
+            return;
+        }
+        for (int i = 0; i < count; i++) {
+            IDisk d = DiskRegistry.get(i);
+            if (d == null) continue;
+            StrBuilder sb = new StrBuilder();
+            sb.append("disk: ");
+            sb.append(d.getName());
+            sb.append(" sectors=");
+            str sec = StrUtils.longToStr(d.getSectorCount());
+            sb.append(sec);
+            Memory.free(sec);
+            str msg = sb.build();
+            StartupLogger.info(msg);
+            Memory.free(msg);
+            sb.dispose();
+        }
+    }
+}

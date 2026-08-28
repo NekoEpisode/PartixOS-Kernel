@@ -1,0 +1,49 @@
+package kr.partix.kernel.main.inits;
+
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.DeviceRegistry;
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.io.pci.PCI;
+import kr.partix.kernel.io.screen.ScreenRegistry;
+import kr.partix.kernel.log.StartupLogger;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+class DeviceInit {
+    static void init() {
+        PCI.enumerate();
+        ScreenRegistry.init();
+
+        int devCount = DeviceRegistry.getCount();
+        for (int i = 0; i < devCount; i++) {
+            IDevice dev = DeviceRegistry.get(i);
+            if (dev == null) continue;
+            StrBuilder sb = new StrBuilder();
+            sb.append("device: ");
+            sb.append(busName(dev.getBusType()));
+            sb.append(" ");
+            sb.append(dev.getName());
+            str msg = sb.build();
+            StartupLogger.info(msg);
+            Memory.free(msg);
+            sb.dispose();
+        }
+
+        StrBuilder sum = new StrBuilder();
+        sum.append("devices found: ");
+        str c = StrUtils.toDec(devCount);
+        sum.append(c);
+        Memory.free(c);
+        str sumMsg = sum.build();
+        StartupLogger.info(sumMsg);
+        Memory.free(sumMsg);
+        sum.dispose();
+    }
+
+    private static str busName(int busType) {
+        if (busType == BusType.PCI) return "pci";
+        if (busType == BusType.PLATFORM) return "platform";
+        return "dt";
+    }
+}

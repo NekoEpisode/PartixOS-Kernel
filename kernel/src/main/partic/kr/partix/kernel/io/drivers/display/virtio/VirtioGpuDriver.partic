@@ -15,6 +15,8 @@ import lang.partic.stdlib.core.memory.Memory;
 class VirtioGpuDriverTemplate implements IDisplayDriver {
     int getType() -> DriverType.DISPLAY
 
+    str description() -> "Virtio GPU driver - provides virtual display"
+
     boolean match(IDevice device) ->
         device.getBusType() == BusType.PCI
         && device.getVendorId() == 0x1AF4 && device.getDeviceId() == 0x1050
@@ -27,6 +29,8 @@ class VirtioGpuDriverTemplate implements IDisplayDriver {
 class VirtioGpuDriver implements IDisplayDriver {
     private final PCIDevice device;
     private IScreen[] screens;
+
+    str description() -> "Virtio GPU driver - provides virtual display"
 
     private static final int VIRTIO_STATUS_ACKNOWLEDGE = 1;
     private static final int VIRTIO_STATUS_DRIVER     = 2;
