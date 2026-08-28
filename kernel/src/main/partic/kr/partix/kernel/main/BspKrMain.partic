@@ -46,6 +46,9 @@ class BspKrMain {
             Memory.free(builded1);
 
             SystemInit.init();
+            StartupLogger.info("---------------");
+            StartupLogger.info("Start complete!");
+            StartupLogger.info("---------------");
             StartupLogger.completed();
 
             Optional<IScreen> optScreen = ScreenRegistry.getPrimary();
