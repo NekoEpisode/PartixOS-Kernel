@@ -7,8 +7,7 @@ class ArchRegistry {
     private static final IArch[] arches = new IArch[1024]; // 最多允许1024个架构
 
     static void init() {
-        // 只创建当前运行架构的实例。绝不能不相关架构也构造：
-        // RISCVArch 构造会校验 FDT（缺失即 BOOT FAILED），x86 上构造它会直接 halt。
+        // 只创建当前运行架构的实例
         short archId = System.archId;
         if (archId == 0) {
             register(new X86Arch());

@@ -8,12 +8,10 @@ import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.core.memory.Memory;
 
 /**
- * NULL 页保护桥（Partic 侧）。
+ * NULL 页保护桥（Partic 侧）
  *
- * 由两架构的 dispatch 在检测到 NULL 页 Page Fault 时调用：
- * 打印 [NPE] 诊断，然后把 fault 作为 TriggerNullPointerEvent 发布到
- * EventBus。控制流如何处理完全由监听器决定——默认注册的
- * NullPointerEventListener 会打印事件内容并停机（halt）。
+ * 由两架构的 dispatch 在检测到 NULL 页 Page Fault 时调用
+ * 打印 [NPE] 诊断，然后把 fault 作为 TriggerNullPointerEvent 发布到 EventBus
  */
 class KernelNullPointerFault {
     /**

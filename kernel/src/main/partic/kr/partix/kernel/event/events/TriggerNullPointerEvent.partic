@@ -4,9 +4,8 @@ import kr.partix.kernel.event.EventId;
 import kr.partix.kernel.event.AEvent;
 
 /**
- * NULL 页 Page Fault 通知事件。
- * 由 KernelNullPointerFault.trigger 在中断上下文中发布。
- * 监听器拿不到中断上下文，只能读取本事件做记录/副作用；
+ * NULL 页 Page Fault 通知事件
+ * 由 KernelNullPointerFault.trigger 在中断上下文中发布
  */
 class TriggerNullPointerEvent extends AEvent {
     private final long address;
