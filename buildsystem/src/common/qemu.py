@@ -181,6 +181,8 @@ def _interactive_qemu_setup(arch: str) -> QemuRunConfig:
     if not extra:
         extra = "-net none -serial stdio"
 
+    print(f"\n  Tip: 记得检查 firmwares 文件夹，如果你遇到了固件功能缺失或其他问题，那里的固件或许会有用")
+
     return QemuRunConfig(
         qemu_binary=qemu,
         memory=memory,
@@ -275,7 +277,8 @@ def launch_qemu(run: QemuRunConfig, disk: Path, arch: str = "x86_64", extra: str
             *fw,
             "-m", run.memory,
             "-drive", f"file={disk},format=raw,if=none,id=drive0",
-            "-device", "virtio-blk-device,drive=drive0",
+            "-device", "ich9-ahci,id=ahci",
+            "-device", "ide-hd,drive=drive0,bus=ahci.0",
             "-device", "virtio-gpu-pci",
         ]
     elif is_riscv:
@@ -296,7 +299,8 @@ def launch_qemu(run: QemuRunConfig, disk: Path, arch: str = "x86_64", extra: str
             "-drive", f"if=pflash,format=raw,unit=0,file={run.ovmf_code},readonly=on",
             "-drive", f"if=pflash,format=raw,unit=1,file={vars_fd}",
             "-drive", f"file={disk},format=raw,if=none,id=drive0",
-            "-device", "virtio-blk-device,drive=drive0",
+            "-device", "ich9-ahci,id=ahci",
+            "-device", "ide-hd,drive=drive0,bus=ahci.0",
             "-device", "virtio-gpu-pci",
         ]
     else:
@@ -312,7 +316,9 @@ def launch_qemu(run: QemuRunConfig, disk: Path, arch: str = "x86_64", extra: str
             cmd += [
                 "-drive", f"if=pflash,format=raw,file={ovmf_vars_local}",
             ]
-        cmd += ["-drive", f"file={disk},format=raw,if=ide"]
+        cmd += ["-drive", f"file={disk},format=raw,if=none,id=drive0",
+                "-device", "ich9-ahci,id=ahci",
+                "-device", "ide-hd,drive=drive0,bus=ahci.0"]
 
     user_args = run.extra_args.split() + extra.split()
     i = 0

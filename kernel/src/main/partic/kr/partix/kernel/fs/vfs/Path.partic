@@ -1,0 +1,111 @@
+package kr.partix.kernel.fs.vfs;
+
+import lang.partic.stdlib.core.memory.Memory;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+
+class Path {
+    static int countComponents(str path) {
+        int count = 0;
+        int i = 0;
+        boolean inComponent = false;
+        while (path[i] != (byte) 0) {
+            if (path[i] == (byte) '/') {
+                inComponent = false;
+            } else if (!inComponent) {
+                count += 1;
+                inComponent = true;
+            }
+            i += 1;
+        }
+        return count;
+    }
+
+    static str[] split(str path) {
+        int count = countComponents(path);
+        if (count == 0) return new str[0];
+        str[] parts = new str[count];
+        int pi = 0;
+        int start = 0;
+        int i = 0;
+        while (path[i] != (byte) 0) {
+            if (path[i] == (byte) '/') {
+                if (i > start) {
+                    parts[pi] = StrUtils.substring(path, start, i);
+                    pi += 1;
+                }
+                start = i + 1;
+            }
+            i += 1;
+        }
+        if (i > start) {
+            parts[pi] = StrUtils.substring(path, start, i);
+        }
+        return parts;
+    }
+
+    static void freeSplit(str[] parts) {
+        if (parts == null) return;
+        for (int i = 0; i < (int) parts.length; i += 1) {
+            if (parts[i] != null) Memory.free((long) parts[i]);
+        }
+        Memory.free((long) parts);
+    }
+
+    static str join(str a, str b) {
+        if (StrUtils.length(a) == 0) return b;
+        if (StrUtils.length(b) == 0) return a;
+        int alen = StrUtils.length(a);
+        if (a[alen - 1] == (byte) '/') {
+            return StrUtils.concat(a, b);
+        }
+        StrBuilder sb = new StrBuilder(a);
+        sb.appendChar('/');
+        sb.append(b);
+        str result = sb.build();
+        sb.dispose();
+        return result;
+    }
+
+    static str getFileName(str path) {
+        int last = -1;
+        int i = 0;
+        while (path[i] != (byte) 0) {
+            if (path[i] == (byte) '/') last = i;
+            i += 1;
+        }
+        if (last < 0) return path;
+        return StrUtils.substring(path, last + 1, i);
+    }
+
+    static str getParent(str path) {
+        int last = -1;
+        int i = 0;
+        while (path[i] != (byte) 0) {
+            if (path[i] == (byte) '/') last = i;
+            i += 1;
+        }
+        if (last <= 0) return "/";
+        return StrUtils.substring(path, 0, last);
+    }
+
+    static boolean isAbsolute(str path) -> path[0] == (byte) '/'
+
+    static boolean startsWith(str path, str prefix) {
+        int plen = StrUtils.length(prefix);
+        if (plen == 0) return true;
+        if (!StrUtils.startsWith(path, prefix)) return false;
+        int pathLen = StrUtils.length(path);
+        if (pathLen == plen) return true;
+        if (plen == 1 && prefix[0] == (byte) '/') return true;
+        return path[plen] == (byte) '/';
+    }
+
+    static str removePrefix(str path, str prefix) {
+        int plen = StrUtils.length(prefix);
+        int pathLen = StrUtils.length(path);
+        if (plen >= pathLen) return "";
+        if (path[plen] == (byte) '/') plen += 1;
+        return StrUtils.substring(path, plen, pathLen);
+    }
+}

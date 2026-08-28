@@ -1,0 +1,41 @@
+package kr.partix.kernel.fs.vfs;
+
+import lang.partic.stdlib.additional.utils.StrUtils;
+
+class VirtualRegistry {
+    private static final int MAX_ENTRIES = 32;
+    private static str[] paths;
+    private static IFileOps[] ops;
+    private static int[] modes;
+    private static int count;
+
+    static void init() {
+        paths = new str[MAX_ENTRIES];
+        ops = new IFileOps[MAX_ENTRIES];
+        modes = new int[MAX_ENTRIES];
+        count = 0;
+    }
+
+    static void register(str path, IFileOps fileOps, int mode) {
+        if (count < MAX_ENTRIES) {
+            paths[count] = path;
+            ops[count] = fileOps;
+            modes[count] = mode;
+            count += 1;
+        }
+    }
+
+    static IFileOps find(str path) {
+        for (int i = 0; i < count; i += 1) {
+            if (StrUtils.equals(paths[i], path)) return ops[i];
+        }
+        return null;
+    }
+
+    static int getMode(str path) {
+        for (int i = 0; i < count; i += 1) {
+            if (StrUtils.equals(paths[i], path)) return modes[i];
+        }
+        return 0;
+    }
+}

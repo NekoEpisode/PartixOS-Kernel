@@ -1,0 +1,11 @@
+package kr.partix.kernel.fs.vfs;
+
+class DEntry {
+    str name;
+    INode inode;
+
+    DEntry(str name, INode inode) {
+        this.name = name;
+        this.inode = inode;
+    }
+}

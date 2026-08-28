@@ -1,0 +1,12 @@
+package kr.partix.kernel.fs.vfs;
+
+interface IFileSystem {
+    INode getRoot();
+    INode lookup(INode parent, str name);
+    int read(INode inode, long offset, byte[] buf, int len);
+    int write(INode inode, long offset, byte[] buf, int len);
+    INode create(INode parent, str name, int type);
+    int remove(INode parent, str name);
+    DEntry[] readDir(INode dir);
+    void sync(INode inode);
+}

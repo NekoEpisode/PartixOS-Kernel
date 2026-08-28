@@ -1,0 +1,41 @@
+package kr.partix.kernel.fs.vfs;
+
+class DiskFileOps implements IFileOps {
+    private INode inode;
+
+    DiskFileOps(INode inode) {
+        this.inode = inode;
+    }
+
+    public int read(FileDescriptor fd, byte[] buf, int len) {
+        int remain = (int) (inode.size - fd.position);
+        if (remain <= 0) return 0;
+        if (len > remain) len = remain;
+        int n = inode.fs.read(inode, fd.position, buf, len);
+        if (n > 0) fd.position += (long) n;
+        return n;
+    }
+
+    public int write(FileDescriptor fd, byte[] buf, int len) {
+        int n = inode.fs.write(inode, fd.position, buf, len);
+        if (n > 0) {
+            fd.position += (long) n;
+            if (fd.position > inode.size) inode.size = fd.position;
+        }
+        return n;
+    }
+
+    public long seek(FileDescriptor fd, long offset, int whence) {
+        if (whence == FileMode.SEEK_SET) fd.position = offset;
+        else if (whence == FileMode.SEEK_CUR) fd.position += offset;
+        else if (whence == FileMode.SEEK_END) fd.position = inode.size + offset;
+        if (fd.position < 0L) fd.position = 0L;
+        return fd.position;
+    }
+
+    public void close(FileDescriptor fd) {
+        if (inode != null && inode.fs != null) {
+            inode.fs.sync(inode);
+        }
+    }
+}

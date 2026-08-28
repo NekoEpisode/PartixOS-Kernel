@@ -1,0 +1,22 @@
+package kr.partix.kernel.fs.vfs;
+
+class INode {
+    int type;
+    long size;
+    IFileSystem fs;
+    long fsData;
+    long dirCluster;
+    int dirOffset;
+
+    INode(int type, long size, IFileSystem fs, long fsData) {
+        this.type = type;
+        this.size = size;
+        this.fs = fs;
+        this.fsData = fsData;
+        this.dirCluster = 0L;
+        this.dirOffset = -1;
+    }
+
+    boolean isFile() -> type == FileMode.TYPE_FILE
+    boolean isDir()  -> type == FileMode.TYPE_DIR
+}

@@ -1,0 +1,228 @@
+package kr.partix.kernel.io.drivers.storage.ahci;
+
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.io.disk.IDisk;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.drivers.storage.IDiskDriver;
+import kr.partix.kernel.io.pci.PCIDevice;
+import kr.partix.kernel.io.pci.IPCIIO;
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+class AhciDriverTemplate implements IDiskDriver {
+    int getType() -> DriverType.STORAGE
+
+    boolean match(IDevice d) {
+        if (d.getBusType() != BusType.PCI) return false;
+        PCIDevice p = (PCIDevice) d;
+        return p.classCode == 0x0106 && p.progIF == 0x01;
+    }
+
+    IDriver create(IDevice d) -> new AhciDriver((PCIDevice) d)
+
+    IDisk[] getDisks() -> new IDisk[0]
+}
+
+class AhciDriver implements IDiskDriver {
+    private static final int MAX_PORTS = 32;
+    private AhciPortDisk[] disks = new AhciPortDisk[MAX_PORTS];
+    private int diskCount;
+    private long abar;
+
+    AhciDriver(PCIDevice dev) {
+        IPCIIO io = BspKrMain.arch.getPciIo();
+        long lo = (long) io.readConfig32(dev.bus, dev.slot, dev.func, 0x24) & 0xFFFFFFFFL;
+        long hi = (long) io.readConfig32(dev.bus, dev.slot, dev.func, 0x28) & 0xFFFFFFFFL;
+        abar = (lo & 0xFFFFFFF0L) | (hi << 32);
+        if (abar == 0) return;
+        initHba();
+    }
+
+    int getType() -> DriverType.STORAGE
+    boolean match(IDevice d) -> false
+    IDriver create(IDevice d) -> this
+
+    IDisk[] getDisks() -> disks
+
+    private void initHba() {
+        // HBA 复位：清掉固件（UEFI/EDK2）留下的引擎状态，否则残留的
+        // 命令槽/引擎状态会让 QEMU（和真实硬件）忽略新命令。
+        System.write32(abar + 4, 1);                    // GHC.HR
+        for (int i = 0; i < 100000; i++) {
+            if ((System.read32(abar + 4) & 1) == 0) break;   // HR 自清
+        }
+        System.write32(abar + 4, 0x80000000);           // GHC.AE
+        int nports = System.read32(abar) & 0x1F;
+        for (int p = 0; p < nports; p++) {
+            long base = abar + 0x100 + (long) p * 0x80;
+            // 端口复位：QEMU 在 DET 1→0 边沿触发（真实硬件写 1 即触发自清）
+            System.write32(base + 0x2C, 1);             // PxSCTL.DET=1
+            System.write32(base + 0x2C, 0);             // PxSCTL.DET=0 → 复位
+            for (int i = 0; i < 10000000; i++) {
+                if ((System.read32(base + 0x28) & 0x0F) == 0x03) break;   // 等 DET=3
+            }
+            if ((System.read32(base + 0x28) & 0x0F) != 0x03) continue;
+            AhciPortDisk d = new AhciPortDisk(this, p, base);
+            if (d.identify()) disks[diskCount++] = d;
+        }
+    }
+}
+
+class AhciPortDisk implements IDisk {
+    private static final int SECTOR = 512;
+
+    private final AhciDriver hba;
+    private final int portNo;
+    private final long port;
+    private long sectorCount;
+    private long cmdList;
+    private long fis;
+    private long cmdTable;
+    private long identBuf;
+    private boolean ok;
+
+    AhciPortDisk(AhciDriver hba, int portNo, long port) {
+        this.hba = hba;
+        this.portNo = portNo;
+        this.port = port;
+        cmdList = allocAligned(4096, 1024);
+        fis = allocAligned(4096, 256);
+        cmdTable = allocAligned(4096, 128);
+        identBuf = allocAligned(512, 8);
+    }
+
+    private static long allocAligned(int size, int align) {
+        long raw = Memory.malloc(size + align);
+        return (raw + align - 1) & ~(long) (align - 1);
+    }
+
+    boolean identify() {
+        System.write32(port + 0x00, (int) cmdList);
+        System.write32(port + 0x04, (int) (cmdList >>> 32));
+        System.write32(port + 0x08, (int) fis);
+        System.write32(port + 0x0C, (int) (fis >>> 32));
+        System.write32(port + 0x18, System.read32(port + 0x18) | 0x10);   // PxCMD.FRE (bit4)
+        for (int i = 0; i < 100000; i++) {
+            if ((System.read32(port + 0x18) & 0x10) != 0) break;
+        }
+        System.write32(port + 0x18, System.read32(port + 0x18) | 0x01);   // PxCMD.ST (bit0)
+        for (int i = 0; i < 100000; i++) {
+            if ((System.read32(port + 0x18) & 0x01) != 0) break;
+        }
+        // 等设备就绪：PxTFD.BSY（bit8）清除（端口复位后设备需要时间初始化，
+        // BSY 未清时发命令会被 HBA/固件拒绝）
+        for (int i = 0; i < 10000000; i++) {
+            if ((System.read32(port + 0x20) & 0x100) == 0) break;
+        }
+        System.write32(port + 0x10, 0xFFFFFFFF);   // 清 PxIS
+
+        slot0(0xEC, 0, 0, identBuf, 1);            // IDENTIFY DEVICE
+        boolean done = waitSlot();
+        int is = System.read32(port + 0x10);
+        System.write32(port + 0x10, 0xFFFFFFFF);
+        if (!done) return false;
+        if ((is & 0x40000000) != 0) return false;  // TFES
+
+        // readIdentU32 返回有符号 int：先 & 0xFFFFFFFFL 无符号化再组合，否则
+        // 负数位模式符号扩展会污染高 32 位（0xFFFFFFFF8xxxxxxx）。
+        long lba48 = ((long) readIdentU32(200) & 0xFFFFFFFFL)
+                | ((long) readIdentU32(204) << 32);
+        if (lba48 == 0) lba48 = (long) readIdentU32(120) & 0xFFFFFFFFL; // LBA28
+        sectorCount = lba48;
+        ok = sectorCount > 0;
+        return ok;
+    }
+
+    private void slot0(int cmd, long lba, int count, long buf, int prdtl) {
+        // dword0: PRDTL(bit16-31) | CLR_BUSY(bit10) | CFL=5(bit0-4)
+        write32(cmdList, (prdtl << 16) | (1 << 10) | 5);
+        write32(cmdList + 4, 0);
+        write32(cmdList + 8, (int) cmdTable);
+        write32(cmdList + 12, (int) (cmdTable >>> 32));
+
+        // H2D FIS（CFIS 区，标准布局）：
+        // byte0=0x27(type) byte1=0x80(C位,update cmd reg)|PMP byte2=cmd byte3=feature
+        // byte4-6=LBA[23:0] byte7=0x40|LBA[27:24]
+        // byte8-10=LBA[31:48] byte11=feature_hi
+        // byte12-13=count 小端
+        write32(cmdTable, 0x27 | (0x80 << 8) | (cmd << 16));
+        int d1 = (int) (lba & 0xFF)
+                | (int) ((lba >> 8) & 0xFF) << 8
+                | (int) ((lba >> 16) & 0xFF) << 16
+                | (((int) ((lba >> 24) & 0x0F) | 0x40) << 24);
+        write32(cmdTable + 4, d1);
+        int d2 = (int) ((lba >> 32) & 0xFF)
+                | (int) ((lba >> 40) & 0xFF) << 8
+                | (int) ((lba >> 48) & 0xFF) << 16;
+        write32(cmdTable + 8, d2);
+        write32(cmdTable + 12, (count & 0xFF) | (((count >> 8) & 0xFF) << 8));
+
+        for (int i = 0; i < prdtl; i++) {
+            long pa = buf + (long) i * SECTOR;
+            // PRD: dword0-1=DBA, dword2=reserved, dword3=flags_size(字节数-1)
+            write32(cmdTable + 0x80 + (long) i * 16, (int) pa);
+            write32(cmdTable + 0x84 + (long) i * 16, (int) (pa >>> 32));
+            write32(cmdTable + 0x88 + (long) i * 16, 0);
+            write32(cmdTable + 0x8C + (long) i * 16, SECTOR - 1);
+        }
+        System.write32(port + 0x38, 1);            // PxCI bit0
+    }
+
+    private boolean waitSlot() {
+        for (int i = 0; i < 5000000; i++) {
+            if ((System.read32(port + 0x38) & 1) == 0) return true;
+        }
+        return false;
+    }
+
+    private int dma(int cmd, long lba, int count, long buf) {
+        if (!ok) return -1;
+        if (count <= 0 || count > 240) return -2;  // PRD 区上限
+        if (lba < 0 || lba + count > sectorCount) return -3;
+        slot0(cmd, lba, count, buf, count);
+        if (!waitSlot()) return -4;
+        int is = System.read32(port + 0x10);
+        System.write32(port + 0x10, is);
+        if ((is & 0x40000000) != 0) return -5;     // TFES
+        return count;
+    }
+
+    private static void write32(long addr, int v) {
+        System.write32(addr, v);
+    }
+
+    private int readIdentU32(int off) {
+        int b0 = (int) System.read8(identBuf + off) & 0xFF;
+        int b1 = (int) System.read8(identBuf + off + 1) & 0xFF;
+        int b2 = (int) System.read8(identBuf + off + 2) & 0xFF;
+        int b3 = (int) System.read8(identBuf + off + 3) & 0xFF;
+        return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24);
+    }
+
+    public int readSectors(long lba, int count, byte[] buf) {
+        return dma(0x25, lba, count, (long) buf + 16);   // +16 跳过数组对象头
+    }
+
+    public int writeSectors(long lba, int count, byte[] buf) {
+        return dma(0x35, lba, count, (long) buf + 16);
+    }
+
+    public long getSectorCount() -> sectorCount
+    public int getSectorSize() -> SECTOR
+
+    public str getName() {
+        StrBuilder sb = new StrBuilder();
+        sb.append("ahci-p");
+        str s = StrUtils.toDec(portNo);
+        sb.append(s);
+        Memory.free(s);
+        str out = sb.build();
+        sb.dispose();
+        return out;
+    }
+}

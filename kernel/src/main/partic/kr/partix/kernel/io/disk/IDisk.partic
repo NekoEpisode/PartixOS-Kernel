@@ -1,0 +1,9 @@
+package kr.partix.kernel.io.disk;
+
+interface IDisk {
+    int readSectors(long lba, int count, byte[] buf);
+    int writeSectors(long lba, int count, byte[] buf);
+    long getSectorCount();
+    int getSectorSize();
+    str getName();
+}

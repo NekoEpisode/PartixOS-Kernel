@@ -1,0 +1,64 @@
+package kr.partix.kernel.fs.vfs;
+
+import kr.partix.kernel.io.disk.IDisk;
+import lang.partic.stdlib.additional.utils.StrUtils;
+
+class MountPoint {
+    str path;
+    IFileSystem fs;
+    IDisk disk;
+
+    MountPoint(str path, IFileSystem fs, IDisk disk) {
+        this.path = path;
+        this.fs = fs;
+        this.disk = disk;
+    }
+}
+
+class MountTable {
+    private static final int MAX_MOUNTS = 16;
+    private static MountPoint[] mounts = new MountPoint[MAX_MOUNTS];
+    private static int count;
+
+    static int mount(str path, IDisk disk, IFileSystem fs) {
+        if (count >= MAX_MOUNTS) return FileMode.ERR_NO_SPACE;
+        for (int i = 0; i < count; i += 1) {
+            if (StrUtils.equals(mounts[i].path, path)) return FileMode.ERR_EXISTS;
+        }
+        mounts[count] = new MountPoint(path, fs, disk);
+        count += 1;
+        return 0;
+    }
+
+    static int unmount(str path) {
+        for (int i = 0; i < count; i += 1) {
+            if (StrUtils.equals(mounts[i].path, path)) {
+                count -= 1;
+                mounts[i] = mounts[count];
+                mounts[count] = null;
+                return 0;
+            }
+        }
+        return FileMode.ERR_NOT_FOUND;
+    }
+
+    static MountPoint resolve(str path) {
+        MountPoint best = null;
+        int bestLen = -1;
+        for (int i = 0; i < count; i += 1) {
+            int mlen = StrUtils.length(mounts[i].path);
+            if (Path.startsWith(path, mounts[i].path) && mlen > bestLen) {
+                best = mounts[i];
+                bestLen = mlen;
+            }
+        }
+        return best;
+    }
+
+    static int getCount() -> count
+
+    static str getMountPath(int i) {
+        if (i >= 0 && i < count) return mounts[i].path;
+        return "";
+    }
+}

@@ -1,0 +1,15 @@
+package kr.partix.kernel.fs.vfs;
+
+class FileDescriptor {
+    IFileOps ops;
+    long position;
+    int mode;
+    long refCount;
+
+    FileDescriptor(IFileOps ops, int mode) {
+        this.ops = ops;
+        this.position = 0L;
+        this.mode = mode;
+        this.refCount = 1L;
+    }
+}

@@ -1,0 +1,385 @@
+package kr.partix.kernel.fs.fat32;
+
+import kr.partix.kernel.io.disk.IDisk;
+import kr.partix.kernel.fs.vfs.IFileSystem;
+import kr.partix.kernel.fs.vfs.INode;
+import kr.partix.kernel.fs.vfs.DEntry;
+import kr.partix.kernel.fs.vfs.FileMode;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.core.memory.Memory;
+
+class Fat32 implements IFileSystem {
+    private IDisk disk;
+    private int bytesPerSec;
+    private int secPerCluster;
+    private int reservedSec;
+    private int numFATs;
+    private long secPerFAT;
+    private long rootCluster;
+    private long fatStart;
+    private long dataStart;
+    private int clusterSize;
+    private boolean valid;
+    private str volumeLabel;
+    private byte[] secBuf;
+    private byte[] clusterBuf;
+
+    Fat32(IDisk disk) {
+        this.disk = disk;
+        this.valid = false;
+        this.secBuf = new byte[512];
+        byte[] bpb = new byte[512];
+        if (disk.readSectors(0L, 1, bpb) != 1) { Memory.free((long) bpb); return; }
+        if ((bpb[0x1FE] & 0xFF) != 0x55 || (bpb[0x1FF] & 0xFF) != 0xAA) { Memory.free((long) bpb); return; }
+        bytesPerSec = Fat32Entry.readU16(bpb, 0x0B);
+        if (bytesPerSec != 512) { Memory.free((long) bpb); return; }
+        secPerCluster = bpb[0x0D] & 0xFF;
+        if (secPerCluster == 0) { Memory.free((long) bpb); return; }
+        reservedSec = Fat32Entry.readU16(bpb, 0x0E);
+        numFATs = bpb[0x10] & 0xFF;
+        secPerFAT = Fat32Entry.readU32(bpb, 0x24);
+        rootCluster = Fat32Entry.readU32(bpb, 0x2C);
+        fatStart = (long) reservedSec;
+        dataStart = fatStart + (long) numFATs * secPerFAT;
+        clusterSize = secPerCluster * bytesPerSec;
+        this.clusterBuf = new byte[clusterSize];
+        int labelLen = 11;
+        while (labelLen > 0 && (bpb[0x47 + labelLen - 1] == (byte) ' ' || bpb[0x47 + labelLen - 1] == (byte) 0)) {
+            labelLen -= 1;
+        }
+        if (labelLen > 0) {
+            str lbl = (str) Memory.malloc(labelLen + 1);
+            for (int li = 0; li < labelLen; li += 1) lbl[li] = bpb[0x47 + li];
+            lbl[labelLen] = (byte) 0;
+            volumeLabel = lbl;
+        } else {
+            volumeLabel = "";
+        }
+        Memory.free((long) bpb);
+        valid = true;
+    }
+
+    boolean isValid() -> valid
+    str getVolumeLabel() -> volumeLabel
+
+    /** 8.3 名大小写不敏感比较（FAT 规范）；LFN 走精确比较。 */
+    private static boolean nameEquals(str a, str b) {
+        if (StrUtils.equals(a, b)) return true;
+        int i = 0;
+        while (true) {
+            byte ca = a[i];
+            byte cb = b[i];
+            if (ca == (byte) 0 && cb == (byte) 0) return true;
+            if (ca == (byte) 0 || cb == (byte) 0) return false;
+            if (ca >= (byte) 'A' && ca <= (byte) 'Z') ca = (byte) (ca + 32);
+            if (cb >= (byte) 'A' && cb <= (byte) 'Z') cb = (byte) (cb + 32);
+            if (ca != cb) return false;
+            i += 1;
+        }
+    }
+
+    public INode getRoot() {
+        if (!valid) return null;
+        return new INode(FileMode.TYPE_DIR, 0L, this, rootCluster);
+    }
+
+    public INode lookup(INode parent, str name) {
+        if (parent == null || !parent.isDir()) return null;
+        long cluster = parent.fsData;
+        StrBuilder lfn = new StrBuilder();
+        while (!isEOC(cluster)) {
+            readCluster(cluster, clusterBuf, 0);
+            int entries = clusterSize / Fat32Entry.SIZE;
+            for (int i = 0; i < entries; i += 1) {
+                int off = i * Fat32Entry.SIZE;
+                if (Fat32Entry.isEnd(clusterBuf, off)) { lfn.dispose(); return null; }
+                if (Fat32Entry.isDeleted(clusterBuf, off)) { lfn.clear(); continue; }
+                if (Fat32Entry.isLFN(clusterBuf, off)) {
+                    int seq = clusterBuf[off] & 0x3F;
+                    str seg = Fat32Entry.readLFN(clusterBuf, off);
+                    if (seq == 1 || (clusterBuf[off] & 0x40) != 0) {
+                        lfn.clear();
+                        lfn.append(seg);
+                    } else {
+                        lfn.append(seg);
+                    }
+                    Memory.free((long) seg);
+                    continue;
+                }
+                str entryName = Fat32Entry.getName(clusterBuf, off);
+                str lfnStr = lfn.build();
+                if (nameEquals(entryName, name) || (lfn.length() > 0 && StrUtils.equals(lfnStr, name))) {
+                    int type = Fat32Entry.isDir(clusterBuf, off) ? FileMode.TYPE_DIR : FileMode.TYPE_FILE;
+                    long size = Fat32Entry.getSize(clusterBuf, off);
+                    long cl = Fat32Entry.getCluster(clusterBuf, off);
+                    INode result = new INode(type, size, this, cl);
+                    result.dirCluster = cluster;
+                    result.dirOffset = off;
+                    Memory.free((long) entryName);
+                    Memory.free((long) lfnStr);
+                    lfn.dispose();
+                    return result;
+                }
+                Memory.free((long) entryName);
+                Memory.free((long) lfnStr);
+                lfn.clear();
+            }
+            cluster = getNextCluster(cluster);
+        }
+        lfn.dispose();
+        return null;
+    }
+
+    public int read(INode inode, long offset, byte[] buf, int len) {
+        if (inode == null) return FileMode.ERR_IO;
+        long cluster = inode.fsData;
+        long skip = offset / (long) clusterSize;
+        for (long s = 0L; s < skip; s += 1L) {
+            cluster = getNextCluster(cluster);
+            if (isEOC(cluster)) return 0;
+        }
+        int posInCluster = (int) (offset % (long) clusterSize);
+        int totalRead = 0;
+        while (totalRead < len && !isEOC(cluster)) {
+            readCluster(cluster, clusterBuf, 0);
+            int canRead = clusterSize - posInCluster;
+            if (canRead > len - totalRead) canRead = len - totalRead;
+            for (int i = 0; i < canRead; i += 1) {
+                buf[totalRead + i] = clusterBuf[posInCluster + i];
+            }
+            totalRead += canRead;
+            posInCluster = 0;
+            cluster = getNextCluster(cluster);
+        }
+        return totalRead;
+    }
+
+    public int write(INode inode, long offset, byte[] buf, int len) {
+        if (inode == null) return FileMode.ERR_IO;
+        long cluster = inode.fsData;
+        if (cluster == 0L) {
+            cluster = allocateCluster();
+            if (cluster == 0L) return FileMode.ERR_NO_SPACE;
+            setFATEntry(cluster, 0x0FFFFFFFL);
+            inode.fsData = cluster;
+        }
+        long skip = offset / (long) clusterSize;
+        long prev = 0L;
+        for (long s = 0L; s < skip; s += 1L) {
+            prev = cluster;
+            long next = getNextCluster(cluster);
+            if (isEOC(next)) {
+                next = allocateCluster();
+                if (next == 0L) return 0;
+                setFATEntry(cluster, next);
+                setFATEntry(next, 0x0FFFFFFFL);
+            }
+            cluster = next;
+        }
+        int posInCluster = (int) (offset % (long) clusterSize);
+        int totalWritten = 0;
+        while (totalWritten < len) {
+            readCluster(cluster, clusterBuf, 0);
+            int canWrite = clusterSize - posInCluster;
+            if (canWrite > len - totalWritten) canWrite = len - totalWritten;
+            for (int i = 0; i < canWrite; i += 1) {
+                clusterBuf[posInCluster + i] = buf[totalWritten + i];
+            }
+            writeCluster(cluster, clusterBuf, 0);
+            totalWritten += canWrite;
+            posInCluster = 0;
+            if (totalWritten < len) {
+                long next = getNextCluster(cluster);
+                if (isEOC(next)) {
+                    next = allocateCluster();
+                    if (next == 0L) return totalWritten;
+                    setFATEntry(cluster, next);
+                    setFATEntry(next, 0x0FFFFFFFL);
+                }
+                cluster = next;
+            }
+        }
+        return totalWritten;
+    }
+
+    public INode create(INode parent, str name, int type) {
+        if (parent == null || !parent.isDir()) return null;
+        long newCluster = allocateCluster();
+        if (newCluster == 0L) return null;
+        setFATEntry(newCluster, 0x0FFFFFFFL);
+        if (type == FileMode.TYPE_DIR) {
+            for (int i = 0; i < clusterSize; i += 1) clusterBuf[i] = (byte) 0;
+            writeCluster(newCluster, clusterBuf, 0);
+        }
+        long dirCluster = parent.fsData;
+        while (!isEOC(dirCluster)) {
+            readCluster(dirCluster, clusterBuf, 0);
+            int entries = clusterSize / Fat32Entry.SIZE;
+            for (int i = 0; i < entries; i += 1) {
+                int off = i * Fat32Entry.SIZE;
+                if (Fat32Entry.isFree(clusterBuf, off)) {
+                    int attr = (type == FileMode.TYPE_DIR) ? Fat32Entry.ATTR_DIR : Fat32Entry.ATTR_ARCHIVE;
+                    Fat32Entry.writeEntry(clusterBuf, off, name, attr, newCluster, 0L);
+                    writeCluster(dirCluster, clusterBuf, 0);
+                    INode result = new INode(type, 0L, this, newCluster);
+                    result.dirCluster = dirCluster;
+                    result.dirOffset = off;
+                    return result;
+                }
+            }
+            long next = getNextCluster(dirCluster);
+            if (isEOC(next)) {
+                next = allocateCluster();
+                if (next == 0L) { freeChain(newCluster); return null; }
+                setFATEntry(dirCluster, next);
+                setFATEntry(next, 0x0FFFFFFFL);
+                for (int i = 0; i < clusterSize; i += 1) clusterBuf[i] = (byte) 0;
+                writeCluster(next, clusterBuf, 0);
+            }
+            dirCluster = next;
+        }
+        return null;
+    }
+
+    public int remove(INode parent, str name) {
+        if (parent == null || !parent.isDir()) return FileMode.ERR_NOT_FOUND;
+        long cluster = parent.fsData;
+        while (!isEOC(cluster)) {
+            readCluster(cluster, clusterBuf, 0);
+            int entries = clusterSize / Fat32Entry.SIZE;
+            for (int i = 0; i < entries; i += 1) {
+                int off = i * Fat32Entry.SIZE;
+                if (Fat32Entry.isEnd(clusterBuf, off)) return FileMode.ERR_NOT_FOUND;
+                if (Fat32Entry.isDeleted(clusterBuf, off)) continue;
+                if (Fat32Entry.isLFN(clusterBuf, off)) continue;
+                str entryName = Fat32Entry.getName(clusterBuf, off);
+                if (nameEquals(entryName, name)) {
+                    long fileCluster = Fat32Entry.getCluster(clusterBuf, off);
+                    freeChain(fileCluster);
+                    clusterBuf[off] = (byte) 0xE5;
+                    writeCluster(cluster, clusterBuf, 0);
+                    Memory.free((long) entryName);
+                    return 0;
+                }
+                Memory.free((long) entryName);
+            }
+            cluster = getNextCluster(cluster);
+        }
+        return FileMode.ERR_NOT_FOUND;
+    }
+
+    public DEntry[] readDir(INode dir) {
+        if (dir == null || !dir.isDir()) return null;
+        int count = 0;
+        long cluster = dir.fsData;
+        while (!isEOC(cluster)) {
+            readCluster(cluster, clusterBuf, 0);
+            int entries = clusterSize / Fat32Entry.SIZE;
+            for (int i = 0; i < entries; i += 1) {
+                int off = i * Fat32Entry.SIZE;
+                if (Fat32Entry.isEnd(clusterBuf, off)) break;
+                if (Fat32Entry.isDeleted(clusterBuf, off)) continue;
+                if (Fat32Entry.isLFN(clusterBuf, off)) continue;
+                str n = Fat32Entry.getName(clusterBuf, off);
+                if (!StrUtils.equals(n, ".") && !StrUtils.equals(n, "..")) count += 1;
+            }
+            cluster = getNextCluster(cluster);
+        }
+        DEntry[] result = new DEntry[count];
+        int ri = 0;
+        cluster = dir.fsData;
+        while (!isEOC(cluster)) {
+            readCluster(cluster, clusterBuf, 0);
+            int entries = clusterSize / Fat32Entry.SIZE;
+            for (int i = 0; i < entries; i += 1) {
+                int off = i * Fat32Entry.SIZE;
+                if (Fat32Entry.isEnd(clusterBuf, off)) break;
+                if (Fat32Entry.isDeleted(clusterBuf, off)) continue;
+                if (Fat32Entry.isLFN(clusterBuf, off)) continue;
+                str n = Fat32Entry.getName(clusterBuf, off);
+                if (StrUtils.equals(n, ".") || StrUtils.equals(n, "..")) continue;
+                int type = Fat32Entry.isDir(clusterBuf, off) ? FileMode.TYPE_DIR : FileMode.TYPE_FILE;
+                long size = Fat32Entry.getSize(clusterBuf, off);
+                long cl = Fat32Entry.getCluster(clusterBuf, off);
+                result[ri] = new DEntry(n, new INode(type, size, this, cl));
+                ri += 1;
+            }
+            cluster = getNextCluster(cluster);
+        }
+        return result;
+    }
+
+    public void sync(INode inode) {
+        if (inode == null || inode.dirCluster == 0L || inode.dirOffset < 0) return;
+        readCluster(inode.dirCluster, clusterBuf, 0);
+        Fat32Entry.writeU32(clusterBuf, inode.dirOffset + 28, inode.size);
+        Fat32Entry.writeU16(clusterBuf, inode.dirOffset + 20, (int) ((inode.fsData >> 16) & 0xFFFF));
+        Fat32Entry.writeU16(clusterBuf, inode.dirOffset + 26, (int) (inode.fsData & 0xFFFF));
+        writeCluster(inode.dirCluster, clusterBuf, 0);
+    }
+
+    private long clusterToLBA(long cluster) {
+        return dataStart + (cluster - 2L) * (long) secPerCluster;
+    }
+
+    private void readCluster(long cluster, byte[] buf, int offset) {
+        long lba = clusterToLBA(cluster);
+        for (int s = 0; s < secPerCluster; s += 1) {
+            disk.readSectors(lba + (long) s, 1, secBuf);
+            for (int i = 0; i < 512; i += 1) {
+                buf[offset + s * 512 + i] = secBuf[i];
+            }
+        }
+    }
+
+    private void writeCluster(long cluster, byte[] buf, int offset) {
+        long lba = clusterToLBA(cluster);
+        for (int s = 0; s < secPerCluster; s += 1) {
+            for (int i = 0; i < 512; i += 1) {
+                secBuf[i] = buf[offset + s * 512 + i];
+            }
+            disk.writeSectors(lba + (long) s, 1, secBuf);
+        }
+    }
+
+    private long getNextCluster(long cluster) {
+        long fatOffset = cluster * 4L;
+        long fatSector = fatStart + fatOffset / (long) bytesPerSec;
+        int entryOff = (int) (fatOffset % (long) bytesPerSec);
+        disk.readSectors(fatSector, 1, secBuf);
+        return Fat32Entry.readU32(secBuf, entryOff) & 0x0FFFFFFFL;
+    }
+
+    private void setFATEntry(long cluster, long value) {
+        long fatOffset = cluster * 4L;
+        long fatSector = fatStart + fatOffset / (long) bytesPerSec;
+        int entryOff = (int) (fatOffset % (long) bytesPerSec);
+        disk.readSectors(fatSector, 1, secBuf);
+        long old = Fat32Entry.readU32(secBuf, entryOff);
+        long newVal = (old & 0xF0000000L) | (value & 0x0FFFFFFFL);
+        Fat32Entry.writeU32(secBuf, entryOff, newVal);
+        disk.writeSectors(fatSector, 1, secBuf);
+        if (numFATs > 1) {
+            disk.writeSectors(fatSector + secPerFAT, 1, secBuf);
+        }
+    }
+
+    private long allocateCluster() {
+        long totalClusters = (disk.getSectorCount() - dataStart) / (long) secPerCluster + 2L;
+        for (long c = 2L; c < totalClusters; c += 1L) {
+            if (getNextCluster(c) == 0L) return c;
+        }
+        return 0L;
+    }
+
+    private void freeChain(long cluster) {
+        while (!isEOC(cluster) && cluster >= 2L) {
+            long next = getNextCluster(cluster);
+            setFATEntry(cluster, 0L);
+            cluster = next;
+        }
+    }
+
+    private boolean isEOC(long cluster) -> cluster >= 0x0FFFFFF8L || cluster < 2L
+}

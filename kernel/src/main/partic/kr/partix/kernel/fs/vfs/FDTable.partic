@@ -1,0 +1,33 @@
+package kr.partix.kernel.fs.vfs;
+
+class FDTable {
+    private static final int MAX_FDS = 64;
+    private static FileDescriptor[] fds = new FileDescriptor[MAX_FDS];
+
+    static int allocate(FileDescriptor fd) {
+        for (int i = 3; i < MAX_FDS; i += 1) {
+            if (fds[i] == null) {
+                fds[i] = fd;
+                return i;
+            }
+        }
+        return FileMode.ERR_NO_FD;
+    }
+
+    static FileDescriptor get(int fd) {
+        if (fd < 0 || fd >= MAX_FDS) return null;
+        return fds[fd];
+    }
+
+    static void release(int fd) {
+        if (fd >= 0 && fd < MAX_FDS) {
+            fds[fd] = null;
+        }
+    }
+
+    static void set(int fd, FileDescriptor desc) {
+        if (fd >= 0 && fd < MAX_FDS) {
+            fds[fd] = desc;
+        }
+    }
+}

@@ -116,6 +116,7 @@ def cmd_setup() -> int:
         CONFIG_PATH.unlink()
     load_settings()
     print("\n  config saved to buildsettings.json")
+    print("\n  Tip: 记得检查 firmwares 文件夹，如果你遇到了固件功能缺失或其他问题，那里的固件或许会有用")
     return 0
 
 

@@ -1,0 +1,183 @@
+package kr.partix.kernel.fs.vfs;
+
+import kr.partix.kernel.io.disk.IDisk;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+class VFS {
+    static int mount(str path, IDisk disk, IFileSystem fs) -> MountTable.mount(path, disk, fs)
+
+    static int unmount(str path) -> MountTable.unmount(path)
+
+    static int open(str path, int mode) {
+        FileDescriptor desc = openDesc(path, mode);
+        if (desc == null) return FileMode.ERR_NOT_FOUND;
+        return FDTable.allocate(desc);
+    }
+
+    static FileDescriptor openDesc(str path, int mode) {
+        IFileOps vops = VirtualRegistry.find(path);
+        if (vops != null) {
+            return new FileDescriptor(vops, mode);
+        }
+
+        INode inode = resolve(path);
+        if (inode == null) {
+            if ((mode & FileMode.CREATE) != 0) {
+                str parent = Path.getParent(path);
+                str name = Path.getFileName(path);
+                INode dir = resolve(parent);
+                if (dir == null || !dir.isDir()) return null;
+                inode = dir.fs.create(dir, name, FileMode.TYPE_FILE);
+                if (inode == null) return null;
+            } else {
+                return null;
+            }
+        }
+        if (inode.isDir()) return null;
+        FileDescriptor fd = new FileDescriptor(new DiskFileOps(inode), mode);
+        if ((mode & FileMode.APPEND) != 0) {
+            fd.position = inode.size;
+        }
+        return fd;
+    }
+
+    static int read(int fd, byte[] buf, int len) {
+        FileDescriptor desc = FDTable.get(fd);
+        if (desc == null || desc.ops == null) return FileMode.ERR_BAD_FD;
+        if ((desc.mode & FileMode.READ) == 0) return FileMode.ERR_BAD_FD;
+        return desc.ops.read(desc, buf, len);
+    }
+
+    static int write(int fd, byte[] buf, int len) {
+        FileDescriptor desc = FDTable.get(fd);
+        if (desc == null || desc.ops == null) return FileMode.ERR_BAD_FD;
+        if ((desc.mode & FileMode.WRITE) == 0) return FileMode.ERR_BAD_FD;
+        return desc.ops.write(desc, buf, len);
+    }
+
+    static long seek(int fd, long offset, int whence) {
+        FileDescriptor desc = FDTable.get(fd);
+        if (desc == null || desc.ops == null) return (long) FileMode.ERR_BAD_FD;
+        return desc.ops.seek(desc, offset, whence);
+    }
+
+    static int close(int fd) {
+        FileDescriptor desc = FDTable.get(fd);
+        if (desc == null) return FileMode.ERR_BAD_FD;
+        if (desc.ops != null) desc.ops.close(desc);
+        FDTable.release(fd);
+        return 0;
+    }
+
+    static boolean isDir(str path) {
+        INode inode = resolve(path);
+        return inode != null && inode.isDir();
+    }
+
+    static DEntry[] ls(str path) {
+        INode dir = resolve(path);
+        DEntry[] fsEntries = null;
+        if (dir != null && dir.isDir()) {
+            fsEntries = dir.fs.readDir(dir);
+        }
+        DEntry[] synEntries = synthesizeDir(path);
+        if (fsEntries == null) return synEntries;
+        if (synEntries == null) return fsEntries;
+
+        int fCount = (int) fsEntries.length;
+        int sCount = (int) synEntries.length;
+        DEntry[] merged = new DEntry[fCount + sCount];
+        int mi = 0;
+        for (int i = 0; i < fCount; i += 1) merged[mi++] = fsEntries[i];
+        for (int i = 0; i < sCount; i += 1) merged[mi++] = synEntries[i];
+        Memory.free((long) fsEntries);
+        Memory.free((long) synEntries);
+        return merged;
+    }
+
+    private static DEntry[] synthesizeDir(str path) {
+        int plen = StrUtils.length(path);
+        str prefix = path;
+        if (plen > 1 && path[plen - 1] == (byte) '/') {
+            prefix = StrUtils.substring(path, 0, plen - 1);
+            plen -= 1;
+        }
+        int childCount = 0;
+        int mountCount = MountTable.getCount();
+        str[] names = new str[mountCount];
+        for (int i = 0; i < mountCount; i += 1) {
+            str mp = MountTable.getMountPath(i);
+            int mlen = StrUtils.length(mp);
+            if (mlen <= plen) continue;
+            boolean match = false;
+            if (plen == 1 && prefix[0] == (byte) '/') {
+                match = true;
+            } else if (StrUtils.startsWith(mp, prefix) && mp[plen] == (byte) '/') {
+                match = true;
+            }
+            if (match) {
+                int start = plen;
+                if (mp[start] == (byte) '/') start += 1;
+                int end = start;
+                while (end < mlen && mp[end] != (byte) '/') end += 1;
+                str child = StrUtils.substring(mp, start, end);
+                boolean dup = false;
+                for (int j = 0; j < childCount; j += 1) {
+                    if (StrUtils.equals(names[j], child)) { dup = true; break; }
+                }
+                if (!dup) {
+                    names[childCount] = child;
+                    childCount += 1;
+                }
+            }
+        }
+        if (childCount == 0) { Memory.free((long) names); return null; }
+        DEntry[] result = new DEntry[childCount];
+        for (int i = 0; i < childCount; i += 1) {
+            result[i] = new DEntry(names[i], new INode(FileMode.TYPE_DIR, 0L, null, 0L));
+        }
+        Memory.free((long) names);
+        return result;
+    }
+
+    static int mkdir(str path) {
+        str parent = Path.getParent(path);
+        str name = Path.getFileName(path);
+        INode dir = resolve(parent);
+        if (dir == null || !dir.isDir()) return FileMode.ERR_NOT_FOUND;
+        INode existing = dir.fs.lookup(dir, name);
+        if (existing != null) return FileMode.ERR_EXISTS;
+        INode created = dir.fs.create(dir, name, FileMode.TYPE_DIR);
+        if (created == null) return FileMode.ERR_IO;
+        return 0;
+    }
+
+    static int rm(str path) {
+        str parent = Path.getParent(path);
+        str name = Path.getFileName(path);
+        INode dir = resolve(parent);
+        if (dir == null || !dir.isDir()) return FileMode.ERR_NOT_FOUND;
+        return dir.fs.remove(dir, name);
+    }
+
+    static INode stat(str path) {
+        return resolve(path);
+    }
+
+    private static INode resolve(str path) {
+        MountPoint mp = MountTable.resolve(path);
+        if (mp == null) return null;
+        str relative = Path.removePrefix(path, mp.path);
+        INode current = mp.fs.getRoot();
+        if (StrUtils.length(relative) == 0) return current;
+        str[] parts = Path.split(relative);
+        for (int i = 0; i < parts.length; i += 1) {
+            if (current == null || !current.isDir()) { Path.freeSplit(parts); return null; }
+            current = current.fs.lookup(current, parts[i]);
+            if (current == null) { Path.freeSplit(parts); return null; }
+        }
+        Path.freeSplit(parts);
+        return current;
+    }
+}

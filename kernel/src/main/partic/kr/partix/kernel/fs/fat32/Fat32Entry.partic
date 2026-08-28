@@ -1,0 +1,117 @@
+package kr.partix.kernel.fs.fat32;
+
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+
+class Fat32Entry {
+    static final int SIZE = 32;
+    static final int ATTR_READONLY = 0x01;
+    static final int ATTR_HIDDEN   = 0x02;
+    static final int ATTR_SYSTEM   = 0x04;
+    static final int ATTR_VOLUME   = 0x08;
+    static final int ATTR_DIR      = 0x10;
+    static final int ATTR_ARCHIVE  = 0x20;
+    static final int ATTR_LFN      = 0x0F;
+
+    static boolean isEnd(byte[] buf, int off)     -> buf[off] == (byte) 0
+    static boolean isDeleted(byte[] buf, int off) -> (buf[off] & 0xFF) == 0xE5
+    static boolean isLFN(byte[] buf, int off)     -> (buf[off + 11] & 0xFF) == ATTR_LFN
+    static boolean isDir(byte[] buf, int off)     -> (buf[off + 11] & ATTR_DIR) != 0
+    static boolean isFree(byte[] buf, int off)    -> isEnd(buf, off) || isDeleted(buf, off)
+    static int getAttr(byte[] buf, int off)       -> buf[off + 11] & 0xFF
+
+    static long getCluster(byte[] buf, int off) {
+        long lo = (long) readU16(buf, off + 26) & 0xFFFFL;
+        long hi = (long) readU16(buf, off + 20) & 0xFFFFL;
+        return (hi << 16) | lo;
+    }
+
+    static long getSize(byte[] buf, int off) -> readU32(buf, off + 28)
+
+    static str getName(byte[] buf, int off) {
+        if (buf[off] == (byte) 0 || (buf[off] & 0xFF) == 0xE5) return "";
+        if ((buf[off + 11] & 0xFF) == ATTR_LFN) return "";
+
+        StrBuilder name = new StrBuilder();
+        for (int i = 0; i < 8; i += 1) {
+            byte c = buf[off + i];
+            if (c == (byte) ' ') break;
+            if (c >= (byte) 'A' && c <= (byte) 'Z') c = (byte) (c + 32);
+            name.appendByte(c);
+        }
+
+        StrBuilder ext = new StrBuilder();
+        for (int i = 0; i < 3; i += 1) {
+            byte c = buf[off + 8 + i];
+            if (c == (byte) ' ') break;
+            if (c >= (byte) 'A' && c <= (byte) 'Z') c = (byte) (c + 32);
+            ext.appendByte(c);
+        }
+
+        if (ext.length() > 0) {
+            name.appendChar('.');
+            name.append(ext.build());
+        }
+        ext.dispose();
+        str result = name.build();
+        name.dispose();
+        return result;
+    }
+
+    static void writeName(byte[] buf, int off, str name) {
+        for (int i = 0; i < 11; i += 1) buf[off + i] = (byte) ' ';
+        int dot = StrUtils.indexOf(name, (byte) '.');
+        int nameLen = dot >= 0 ? dot : StrUtils.length(name);
+        for (int i = 0; i < nameLen && i < 8; i += 1) {
+            byte c = name[i];
+            if (c >= (byte) 'a' && c <= (byte) 'z') c = (byte) (c - 32);
+            buf[off + i] = c;
+        }
+        if (dot >= 0) {
+            int extStart = dot + 1;
+            int extLen = StrUtils.length(name) - extStart;
+            for (int i = 0; i < extLen && i < 3; i += 1) {
+                byte c = name[extStart + i];
+                if (c >= (byte) 'a' && c <= (byte) 'z') c = (byte) (c - 32);
+                buf[off + 8 + i] = c;
+            }
+        }
+    }
+
+    static void writeEntry(byte[] buf, int off, str name, int attr, long cluster, long size) {
+        for (int i = 0; i < SIZE; i += 1) buf[off + i] = (byte) 0;
+        writeName(buf, off, name);
+        buf[off + 11] = (byte) attr;
+        writeU16(buf, off + 20, (int) ((cluster >> 16) & 0xFFFF));
+        writeU16(buf, off + 26, (int) (cluster & 0xFFFF));
+        writeU32(buf, off + 28, size);
+    }
+
+    static int readU16(byte[] buf, int off) -> (buf[off] & 0xFF) | ((buf[off + 1] & 0xFF) << 8)
+
+    static long readU32(byte[] buf, int off) ->
+        ((long) readU16(buf, off) & 0xFFFFL) | (((long) readU16(buf, off + 2) & 0xFFFFL) << 16)
+
+    static str readLFN(byte[] buf, int off) {
+        StrBuilder sb = new StrBuilder();
+        int i = 1;
+        while (i < 11) { byte c = buf[off + i]; if (c != (byte) 0 && c != (byte) 0xFF) sb.appendByte(c); i += 2; }
+        i = 14;
+        while (i < 26) { byte c = buf[off + i]; if (c != (byte) 0 && c != (byte) 0xFF) sb.appendByte(c); i += 2; }
+        i = 28;
+        while (i < 32) { byte c = buf[off + i]; if (c != (byte) 0 && c != (byte) 0xFF) sb.appendByte(c); i += 2; }
+        str result = sb.build();
+        sb.dispose();
+        return result;
+    }
+
+    static void writeU16(byte[] buf, int off, int val) {
+        buf[off] = (byte) (val & 0xFF);
+        buf[off + 1] = (byte) ((val >> 8) & 0xFF);
+    }
+
+    static void writeU32(byte[] buf, int off, long val) {
+        writeU16(buf, off, (int) (val & 0xFFFF));
+        writeU16(buf, off + 2, (int) ((val >> 16) & 0xFFFF));
+    }
+}

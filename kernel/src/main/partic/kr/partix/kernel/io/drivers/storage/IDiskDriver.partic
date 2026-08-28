@@ -1,0 +1,8 @@
+package kr.partix.kernel.io.drivers.storage;
+
+import kr.partix.kernel.io.disk.IDisk;
+import kr.partix.kernel.io.drivers.IDriver;
+
+interface IDiskDriver extends IDriver {
+    IDisk[] getDisks();
+}

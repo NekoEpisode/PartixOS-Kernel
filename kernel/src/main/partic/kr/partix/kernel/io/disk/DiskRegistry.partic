@@ -1,0 +1,25 @@
+package kr.partix.kernel.io.disk;
+
+import kr.partix.kernel.io.drivers.DriverRegistry;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.drivers.storage.IDiskDriver;
+
+class DiskRegistry {
+    private static IDisk[] disks = new IDisk[16];
+    private static int count;
+
+    static void init() {
+        IDriver[] drivers = DriverRegistry.findAll(DriverType.STORAGE);
+        for (int i = 0; i < drivers.length; i++) {
+            if (drivers[i] == null) break;
+            IDisk[] ds = ((IDiskDriver) drivers[i]).getDisks();
+            for (int j = 0; j < ds.length; j++) {
+                if (ds[j] != null && count < disks.length) disks[count++] = ds[j];
+            }
+        }
+    }
+
+    static int getCount() -> count
+    static IDisk get(int index) -> disks[index]
+}

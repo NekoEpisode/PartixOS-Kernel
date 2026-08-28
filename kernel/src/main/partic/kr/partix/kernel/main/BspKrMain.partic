@@ -1,6 +1,7 @@
 package kr.partix.kernel.main;
 
 import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.additional.utils.Optional;
 import lang.partic.stdlib.core.memory.Memory;
 import lang.partic.stdlib.core.exception.exception.Exception;
@@ -19,7 +20,13 @@ import kr.partix.kernel.device.DeviceRegistry;
 import kr.partix.kernel.device.IDevice;
 import kr.partix.kernel.io.drivers.DriverRegistry;
 import kr.partix.kernel.io.drivers.display.virtio.VirtioGpuDriverTemplate;
-import kr.partix.kernel.device.DeviceRegistry;
+import kr.partix.kernel.io.drivers.storage.ahci.AhciDriverTemplate;
+import kr.partix.kernel.io.disk.DiskRegistry;
+import kr.partix.kernel.io.disk.IDisk;
+import kr.partix.kernel.fs.fat32.Fat32;
+import kr.partix.kernel.fs.vfs.DEntry;
+import kr.partix.kernel.fs.vfs.FileMode;
+import kr.partix.kernel.fs.vfs.VFS;
 import kr.partix.kernel.io.screen.IScreen;
 import kr.partix.kernel.io.screen.ScreenRegistry;
 import kr.partix.kernel.io.screen.UefiFramebufferScreen;
@@ -69,6 +76,7 @@ class BspKrMain {
             Memory.free(builded1);
 
             DriverRegistry.register(new VirtioGpuDriverTemplate());
+            DriverRegistry.register(new AhciDriverTemplate());
             if (UefiFramebufferScreen.hasFramebuffer()) {
                 DeviceRegistry.register(new GopDevice());
                 DriverRegistry.register(new UefiGopDriver());
@@ -76,6 +84,7 @@ class BspKrMain {
 
             PCI.enumerate();
             ScreenRegistry.init();
+            DiskRegistry.init();
 
             int devCount = DeviceRegistry.getCount();
             for (int i = 0; i < devCount; i++) {
@@ -90,6 +99,81 @@ class BspKrMain {
                 arch.getUart().println(devLine);
                 devSb.dispose();
                 Memory.free(devLine);
+            }
+
+            // 磁盘列表（驱动产物）
+            int diskCount = DiskRegistry.getCount();
+            for (int i = 0; i < diskCount; i++) {
+                IDisk d = DiskRegistry.get(i);
+                if (d == null) continue;
+                StrBuilder diskSb = new StrBuilder();
+                diskSb.append("[disk] ");
+                diskSb.append(d.getName());
+                diskSb.append(" sectors=");
+                str sec = StrUtils.longToStr(d.getSectorCount());
+                diskSb.append(sec);
+                Memory.free(sec);
+                str diskLine = diskSb.build();
+                arch.getUart().println(diskLine);
+                diskSb.dispose();
+                Memory.free(diskLine);
+            }
+
+            // 文件系统：挂载第一块盘为 FAT32 根
+            if (diskCount > 0) {
+                IDisk disk0 = DiskRegistry.get(0);
+                Fat32 fat = new Fat32(disk0);
+                if (fat.isValid()) {
+                    VFS.mount("/", disk0, fat);
+                    DEntry[] entries = VFS.ls("/");
+                    arch.getUart().println("[fs] mounted FAT32 at /");
+                    for (int i = 0; i < entries.length; i++) {
+                        DEntry e = entries[i];
+                        if (e == null) continue;
+                        StrBuilder fsSb = new StrBuilder();
+                        fsSb.append("[fs]   ");
+                        fsSb.append(e.name);
+                        if (e.inode != null && e.inode.isDir()) fsSb.append("/");
+                        str fsLine = fsSb.build();
+                        arch.getUart().println(fsLine);
+                        fsSb.dispose();
+                        Memory.free(fsLine);
+                    }
+                    // 读 KERNEL.ELF 验证（ELF magic: 7F 45 4C 46）
+                    int fd = VFS.open("/KERNEL.ELF", FileMode.READ);
+                    if (fd > 0) {
+                        byte[] hdr = new byte[16];
+                        int n = VFS.read(fd, hdr, 16);
+                        StrBuilder fsSb = new StrBuilder();
+                        fsSb.append("[fs] /KERNEL.ELF read=");
+                        str ns = StrUtils.toDec(n);
+                        fsSb.append(ns);
+                        Memory.free(ns);
+                        fsSb.append(" first=");
+                        str h0 = StrUtils.toHex((long) hdr[0] & 0xFFL);
+                        fsSb.append(h0);
+                        Memory.free(h0);
+                        str h1 = StrUtils.toHex((long) hdr[1] & 0xFFL);
+                        fsSb.append(h1);
+                        Memory.free(h1);
+                        str h2 = StrUtils.toHex((long) hdr[2] & 0xFFL);
+                        fsSb.append(h2);
+                        Memory.free(h2);
+                        str h3 = StrUtils.toHex((long) hdr[3] & 0xFFL);
+                        fsSb.append(h3);
+                        Memory.free(h3);
+                        str fsLine = fsSb.build();
+                        arch.getUart().println(fsLine);
+                        fsSb.dispose();
+                        Memory.free(fsLine);
+                        Memory.free((long) hdr);
+                        VFS.close(fd);
+                    } else {
+                        arch.getUart().println("[fs] /KERNEL.ELF open failed");
+                    }
+                } else {
+                    arch.getUart().println("[fs] no FAT32 on disk 0");
+                }
             }
 
             Optional<IScreen> optScreen = ScreenRegistry.getPrimary();

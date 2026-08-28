@@ -1,0 +1,24 @@
+package kr.partix.kernel.fs.vfs;
+
+class FileMode {
+    static final int READ   = 1;
+    static final int WRITE  = 2;
+    static final int APPEND = 4;
+    static final int CREATE = 8;
+
+    static final int TYPE_FILE = 0;
+    static final int TYPE_DIR  = 1;
+
+    static final int SEEK_SET = 0;
+    static final int SEEK_CUR = 1;
+    static final int SEEK_END = 2;
+
+    static final int ERR_NOT_FOUND   = -1;
+    static final int ERR_NOT_DIR     = -2;
+    static final int ERR_IS_DIR      = -3;
+    static final int ERR_NO_SPACE    = -4;
+    static final int ERR_NO_FD       = -5;
+    static final int ERR_BAD_FD      = -6;
+    static final int ERR_EXISTS      = -7;
+    static final int ERR_IO          = -8;
+}
