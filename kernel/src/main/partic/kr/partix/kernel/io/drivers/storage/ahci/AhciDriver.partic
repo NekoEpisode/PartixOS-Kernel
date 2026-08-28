@@ -10,6 +10,7 @@ import kr.partix.kernel.io.pci.PCIDevice;
 import kr.partix.kernel.io.pci.IPCIIO;
 import kr.partix.kernel.main.BspKrMain;
 import kr.partix.kernel.sys.System;
+import kr.partix.kernel.timer.Timer;
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.core.memory.Memory;
@@ -57,20 +58,17 @@ class AhciDriver implements IDiskDriver {
         // HBA 复位：清掉固件（UEFI/EDK2）留下的引擎状态，否则残留的
         // 命令槽/引擎状态会让 QEMU（和真实硬件）忽略新命令。
         System.write32(abar + 4, 1);                    // GHC.HR
-        for (int i = 0; i < 100000; i++) {
-            if ((System.read32(abar + 4) & 1) == 0) break;   // HR 自清
-        }
+        AhciWait.clear(abar + 4, 1);                    // HR 自清
         System.write32(abar + 4, 0x80000000);           // GHC.AE
         int nports = System.read32(abar) & 0x1F;
         for (int p = 0; p < nports; p++) {
             long base = abar + 0x100 + (long) p * 0x80;
+            // 只处理有设备的端口——空端口复位后 DET 永远不到 3，等满超时是白等
+            if ((System.read32(base + 0x28) & 0x0F) != 0x03) continue;
             // 端口复位：QEMU 在 DET 1→0 边沿触发（真实硬件写 1 即触发自清）
             System.write32(base + 0x2C, 1);             // PxSCTL.DET=1
             System.write32(base + 0x2C, 0);             // PxSCTL.DET=0 → 复位
-            for (int i = 0; i < 10000000; i++) {
-                if ((System.read32(base + 0x28) & 0x0F) == 0x03) break;   // 等 DET=3
-            }
-            if ((System.read32(base + 0x28) & 0x0F) != 0x03) continue;
+            AhciWait.until(base + 0x28, 0x03);          // 等 DET=3（链路重新协商）
             AhciPortDisk d = new AhciPortDisk(this, p, base);
             if (d.identify()) disks[diskCount++] = d;
         }
@@ -111,18 +109,12 @@ class AhciPortDisk implements IDisk {
         System.write32(port + 0x08, (int) fis);
         System.write32(port + 0x0C, (int) (fis >>> 32));
         System.write32(port + 0x18, System.read32(port + 0x18) | 0x10);   // PxCMD.FRE (bit4)
-        for (int i = 0; i < 100000; i++) {
-            if ((System.read32(port + 0x18) & 0x10) != 0) break;
-        }
+        AhciWait.set(port + 0x18, 0x10);
         System.write32(port + 0x18, System.read32(port + 0x18) | 0x01);   // PxCMD.ST (bit0)
-        for (int i = 0; i < 100000; i++) {
-            if ((System.read32(port + 0x18) & 0x01) != 0) break;
-        }
-        // 等设备就绪：PxTFD.BSY（bit8）清除（端口复位后设备需要时间初始化，
-        // BSY 未清时发命令会被 HBA/固件拒绝）
-        for (int i = 0; i < 10000000; i++) {
-            if ((System.read32(port + 0x20) & 0x100) == 0) break;
-        }
+        AhciWait.set(port + 0x18, 0x01);
+        // 等设备就绪：PxTFD.BSY（bit8）清除。真机上复位后设备需毫秒级初始化，
+        // BSY 未清时发命令会被 HBA 拒绝；QEMU 复位后该位不置位，用短超时（100ms）兜底。
+        AhciWait.clear(port + 0x20, 0x100, Timer.TICK_HZ / 2);
         System.write32(port + 0x10, 0xFFFFFFFF);   // 清 PxIS
 
         slot0(0xEC, 0, 0, identBuf, 1);            // IDENTIFY DEVICE
@@ -178,7 +170,8 @@ class AhciPortDisk implements IDisk {
     }
 
     private boolean waitSlot() {
-        for (int i = 0; i < 5000000; i++) {
+        long deadline = Timer.getTicks() + Timer.TICK_HZ;
+        while (Timer.getTicks() < deadline) {
             if ((System.read32(port + 0x38) & 1) == 0) return true;
         }
         return false;

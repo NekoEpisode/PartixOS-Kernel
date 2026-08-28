@@ -1,0 +1,47 @@
+package kr.partix.kernel.io.drivers.storage.ahci;
+
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.timer.Timer;
+
+/**
+ * AHCI 等待辅助：tick 粒度轮询 + 可配超时。
+ * 不用固定大循环——QEMU tcg 下每次 MMIO 读约 1μs，固定 1000 万次会白等数秒，
+ * 而设备就绪实际在微秒/毫秒级。默认超时 1 秒（Timer.TICK_HZ ticks）。
+ */
+class AhciWait {
+    static void until(long reg, int want) {
+        until(reg, want, Timer.TICK_HZ);
+    }
+
+    static void clear(long reg, int mask) {
+        clear(reg, mask, Timer.TICK_HZ);
+    }
+
+    static void set(long reg, int mask) {
+        set(reg, mask, Timer.TICK_HZ);
+    }
+
+    /** 等 (read32(reg) & 0x0F) == want，ticks 为超时长度。 */
+    static void until(long reg, int want, long ticks) {
+        long deadline = Timer.getTicks() + ticks;
+        while (Timer.getTicks() < deadline) {
+            if ((System.read32(reg) & 0x0F) == want) return;
+        }
+    }
+
+    /** 等 (read32(reg) & mask) 变 0。 */
+    static void clear(long reg, int mask, long ticks) {
+        long deadline = Timer.getTicks() + ticks;
+        while (Timer.getTicks() < deadline) {
+            if ((System.read32(reg) & mask) == 0) return;
+        }
+    }
+
+    /** 等 (read32(reg) & mask) 变非 0。 */
+    static void set(long reg, int mask, long ticks) {
+        long deadline = Timer.getTicks() + ticks;
+        while (Timer.getTicks() < deadline) {
+            if ((System.read32(reg) & mask) != 0) return;
+        }
+    }
+}
