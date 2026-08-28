@@ -16,7 +16,6 @@ import kr.partix.kernel.io.screen.utils.ScreenUtils;
 import kr.partix.kernel.io.screen.utils.RGB;
 import kr.partix.kernel.utils.Point;
 import kr.partix.kernel.log.StartupLogger;
-import kr.partix.kernel.exception.KernelNullPointerException;
 
 class BspKrMain {
     static IArch arch;
@@ -70,9 +69,7 @@ class BspKrMain {
             }
             Memory.free((long) optScreen);
 
-            throw new KernelNullPointerException("Test NPE", null);
-
-            // while (true) {}
+            while (true) {}
         } catch (Exception e) {
             arch.getUart().println("++++++++++++++++++");
             arch.getUart().println("!!! EXCEPTION !!!");
