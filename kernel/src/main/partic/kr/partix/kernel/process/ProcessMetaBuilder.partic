@@ -1,0 +1,22 @@
+package kr.partix.kernel.process;
+
+import lang.partic.stdlib.additional.collection.list.List;
+import kr.partix.kernel.program.IProgram;
+import kr.partix.kernel.arch.thread.Thread;
+
+class ProcessMetaBuilder {
+    private final IProgram program;
+    private final List<Thread> threads;
+    private str name = "unknown";
+
+    ProcessMetaBuilder(IProgram program, List<Thread> threads) {
+        this.threads = threads;
+        this.program = program;
+    }
+
+    void name(str name) {
+        this.name = name;
+    }
+
+    ProcessMeta build() -> new ProcessMeta(name, program, threads)
+}

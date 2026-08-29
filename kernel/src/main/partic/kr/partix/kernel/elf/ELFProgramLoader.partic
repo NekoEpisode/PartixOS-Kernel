@@ -1,0 +1,22 @@
+package kr.partix.kernel.elf;
+
+import kr.partix.kernel.program.IProgram;
+import kr.partix.kernel.program.IProgramLoader;
+
+/**
+ * ELF 程序加载器：magic 检测 + 用 ELF.parse 解析。
+ */
+class ELFProgramLoader implements IProgramLoader {
+    boolean matches(byte[] data) ->
+        data != null && data.length >= 4
+        && data[0] == (byte) 0x7F && data[1] == (byte) 'E'
+        && data[2] == (byte) 'L' && data[3] == (byte) 'F'
+
+    IProgram load(byte[] data) {
+        ELF elf = ELF.parse(data);
+        if (elf == null) return null;
+        return new ELFProgram(elf);
+    }
+
+    str getFormatName() -> "elf"
+}

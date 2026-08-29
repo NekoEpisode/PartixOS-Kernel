@@ -1,6 +1,7 @@
 package kr.partix.kernel.main;
 
 import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.additional.utils.Optional;
 import lang.partic.stdlib.core.memory.Memory;
 import lang.partic.stdlib.core.exception.exception.Exception;
@@ -9,6 +10,7 @@ import kr.partix.kernel.arch.ArchRegistry;
 import kr.partix.kernel.arch.IArch;
 import kr.partix.kernel.main.inits.EventInit;
 import kr.partix.kernel.memory.MemoryMap;
+import kr.partix.kernel.memory.PageAllocator;
 import kr.partix.kernel.io.screen.IScreen;
 import kr.partix.kernel.io.screen.ScreenRegistry;
 import kr.partix.kernel.sys.System;
@@ -17,6 +19,10 @@ import kr.partix.kernel.io.screen.utils.RGB;
 import kr.partix.kernel.utils.Point;
 import kr.partix.kernel.log.StartupLogger;
 import kr.partix.kernel.debug.StackTrace;
+import kr.partix.kernel.process.ProcessMetaBuilder;
+import kr.partix.kernel.process.ProcessManager;
+import kr.partix.kernel.process.ProcessMeta;
+import kr.partix.kernel.process.Process;
 
 class BspKrMain {
     static IArch arch;
@@ -30,6 +36,7 @@ class BspKrMain {
             EventInit.init();
 
             MemoryMap.init();
+            PageAllocator.init();
             arch.getPageTableManager().init();
             arch.getPageTableManager().load();
 
@@ -69,6 +76,15 @@ class BspKrMain {
                 arch.getUart().println("[screen] no display, skipped");
             }
             Memory.free((long) optScreen);
+
+            for (int i = 0; i < 30; i++) {
+                ProcessMetaBuilder builder = new ProcessMetaBuilder(null, null);
+                ProcessMeta buildedMeta = builder.build();
+                Process p = ProcessManager.createProcess(buildedMeta);
+                arch.getUart().println(StrUtils.longToStr(p.pid()));
+                Memory.free((long) buildedMeta);
+                Memory.free((long) builder);
+            }
 
             while (true) {}
         } catch (Exception e) {

@@ -18,6 +18,7 @@
 // reclamation is left for a later bitmap-based pass (see TODO).
 
 #include "allocator.h"
+#include "page_alloc.h"
 
 #define HEADER_SIZE   16
 #define PAGE_SIZE     4096
@@ -67,11 +68,27 @@ static uint64_t slab_block_size(int ci) {
     return align16(HEADER_SIZE + class_sizes[ci]);
 }
 
-// Carve one new block for class ci from the page region (16-aligned).
+// Extension pages from the page allocator (once the bootstrap bump region
+// is exhausted): one page at a time, carved in-page for slab classes.
+static uint64_t ext_page;      // current extension page base
+static uint64_t ext_page_off;  // used offset within the page
+
+// Carve one new block for class ci. Prefers the bootstrap bump region;
+// after it is exhausted, takes pages from the page allocator.
 static uint64_t slab_carve(int ci) {
-    uint64_t block = page_next;
-    page_next += slab_block_size(ci);
-    if (page_next > page_end) return 0;  // heap exhausted
+    uint64_t need = slab_block_size(ci);
+    if (page_next + need <= page_end) {
+        uint64_t block = page_next;
+        page_next += need;
+        return block;
+    }
+    if (!ext_page || ext_page_off + need > PAGE_SIZE) {
+        ext_page = page_alloc();
+        if (!ext_page) return 0;  // heap exhausted
+        ext_page_off = 0;
+    }
+    uint64_t block = ext_page + ext_page_off;
+    ext_page_off += need;
     return block;
 }
 
@@ -93,12 +110,18 @@ uint64_t kr_alloc(uint64_t size) {
         return block + HEADER_SIZE;
     }
 
-    // Large allocation: whole pages, bump-allocated (16-aligned by PAGE_SIZE).
+    // Large allocation: whole pages. Prefers the bootstrap bump region;
+    // after it is exhausted, takes contiguous pages from the page allocator.
     uint64_t need = align16(HEADER_SIZE + size);
     uint64_t pages = (need + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint64_t block = page_next;
-    page_next += pages * PAGE_SIZE;
-    if (page_next > page_end) return 0;
+    uint64_t block;
+    if (page_next + pages * PAGE_SIZE <= page_end) {
+        block = page_next;
+        page_next += pages * PAGE_SIZE;
+    } else {
+        block = page_alloc_contig((int)pages);
+        if (!block) return 0;
+    }
     ((uint64_t *)block)[0] = BIG_MAGIC;
     ((uint64_t *)block)[1] = pages;
     big_outstanding++;
@@ -111,8 +134,10 @@ void kr_dealloc(uint64_t addr) {
     uint64_t ci = ((uint64_t *)block)[0];
 
     if (ci == BIG_MAGIC) {
-        // TODO: return large pages to a page free list / bitmap. For now the
-        // page region is bump-only, so large blocks are not reclaimed.
+        uint64_t pages = ((uint64_t *)block)[1];
+        // Bump-region pages are reserved in the page allocator, so
+        // page_free on them is a safe no-op; extension pages are returned.
+        for (uint64_t i = 0; i < pages; i++) page_free(block + i * PAGE_SIZE);
         big_outstanding--;
         return;
     }

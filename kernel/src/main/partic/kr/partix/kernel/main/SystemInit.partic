@@ -1,12 +1,17 @@
 package kr.partix.kernel.main;
 
+import kr.partix.kernel.elf.ELFProgramLoader;
 import kr.partix.kernel.main.inits.DriverInit;
 import kr.partix.kernel.main.inits.DeviceInit;
 import kr.partix.kernel.main.inits.DiskInit;
 import kr.partix.kernel.main.inits.FSInit;
+import kr.partix.kernel.program.ProgramLoaderRegistry;
 
 class SystemInit {
     static void init() {
+        // 程序加载格式注册（magic 自动检测）
+        ProgramLoaderRegistry.register(new ELFProgramLoader());
+
         DriverInit.init();
         DeviceInit.init();
         DiskInit.init();

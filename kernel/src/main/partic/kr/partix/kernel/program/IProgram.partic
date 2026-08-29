@@ -1,0 +1,18 @@
+package kr.partix.kernel.program;
+
+/**
+ * 程序镜像抽象——加载格式无关的解析结果。
+ *
+ * ProcessManager 只依赖本接口（入口点 + 内存段描述），
+ * 不关心底层是 ELF 还是其他格式。
+ */
+interface IProgram {
+    /** 入口点（虚拟地址）。 */
+    long getEntry();
+
+    /** 目标架构（ELF e_machine 值，如 EM_RISCV=243 / EM_X86_64=62）。 */
+    int getMachine();
+
+    /** 需要落内存的段（LOAD 段等）。 */
+    ProgramSegment[] getSegments();
+}

@@ -1,0 +1,155 @@
+package kr.partix.kernel.elf;
+
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * ELF64 解析器 + 解析结果对象。
+ *
+ * parse(byte[]) 校验头并解析程序段（"代码块"）与节表；
+ * 失败（非 ELF / 截断 / 数量超限）返回 null。
+ * 节名来自 .shstrtab，按需 malloc；整个 ELF 对象的释放由调用方负责。
+ */
+class ELF {
+    static final int ET_EXEC = 2;
+    static final int ET_DYN = 3;
+    static final int EM_X86_64 = 62;
+    static final int EM_RISCV = 243;
+
+    private static final int MAX_PHDRS = 64;
+    private static final int MAX_SHDRS = 256;
+
+    private final int type;
+    private final int machine;
+    private final long entry;
+    private final ELFSegment[] segments;
+    private final ELFSection[] sections;
+
+    ELF(int type, int machine, long entry, ELFSegment[] segments, ELFSection[] sections) {
+        this.type = type;
+        this.machine = machine;
+        this.entry = entry;
+        this.segments = segments;
+        this.sections = sections;
+    }
+
+    static ELF parse(byte[] data) {
+        if (data == null || data.length < 64) return null;
+        if (data[0] != (byte) 0x7F || data[1] != (byte) 'E'
+            || data[2] != (byte) 'L' || data[3] != (byte) 'F') return null;
+        if (data[4] != 2) return null;  // ELFCLASS64
+        if (data[5] != 1) return null;  // little-endian
+        if (data[6] != 1) return null;  // EV_CURRENT
+
+        int type = readU16(data, 16);
+        int machine = readU16(data, 18);
+        long entry = readU64(data, 24);
+        long phoff = readU64(data, 32);
+        long shoff = readU64(data, 40);
+        int phentsize = readU16(data, 54);
+        int phnum = readU16(data, 56);
+        int shentsize = readU16(data, 58);
+        int shnum = readU16(data, 60);
+        int shstrndx = readU16(data, 62);
+
+        if (phnum > MAX_PHDRS || phentsize < 56) return null;
+        if (shnum > MAX_SHDRS || shentsize < 64) return null;
+
+        // 程序段
+        ELFSegment[] segs = new ELFSegment[phnum];
+        for (int i = 0; i < phnum; i++) {
+            long base = phoff + (long) i * phentsize;
+            if (base < 0 || base + 56 > (long) data.length) return null;
+            int off = (int) base;
+            segs[i] = new ELFSegment(
+                readU32(data, off),
+                readU32(data, off + 4),
+                readU64(data, off + 8),
+                readU64(data, off + 16),
+                readU64(data, off + 32),
+                readU64(data, off + 40));
+        }
+
+        // 第一遍：读节头裸数据，记录 shstrtab 位置
+        long[] secName = new long[shnum];
+        long[] secType = new long[shnum];
+        long[] secFlags = new long[shnum];
+        long[] secAddr = new long[shnum];
+        long[] secOff = new long[shnum];
+        long[] secSize = new long[shnum];
+        long shstrOff = 0;
+        long shstrSize = 0;
+        for (int i = 0; i < shnum; i++) {
+            long base = shoff + (long) i * shentsize;
+            if (base < 0 || base + 64 > (long) data.length) return null;
+            int off = (int) base;
+            secName[i] = readU32(data, off);
+            secType[i] = readU32(data, off + 4);
+            secFlags[i] = readU64(data, off + 8);
+            secAddr[i] = readU64(data, off + 16);
+            secOff[i] = readU64(data, off + 24);
+            secSize[i] = readU64(data, off + 32);
+            if (i == shstrndx) {
+                shstrOff = secOff[i];
+                shstrSize = secSize[i];
+            }
+        }
+
+        // 第二遍：从 shstrtab 填节名并构造
+        ELFSection[] secs = new ELFSection[shnum];
+        for (int i = 0; i < shnum; i++) {
+            str nm = null;
+            if (i != shstrndx && shstrSize > 0) {
+                nm = readCString(data, shstrOff + secName[i], shstrOff + shstrSize);
+            }
+            secs[i] = new ELFSection(nm, (int) secType[i], secFlags[i],
+                                     secAddr[i], secOff[i], secSize[i]);
+        }
+
+        return new ELF(type, machine, entry, segs, secs);
+    }
+
+    int getType() -> type
+    int getMachine() -> machine
+    long getEntry() -> entry
+
+    ELFSegment[] getSegments() -> segments
+    ELFSection[] getSections() -> sections
+
+    /** 按名字找节（如 ".text"、".symtab"）；没有返回 null。 */
+    ELFSection findSection(str name) {
+        if (name == null) return null;
+        for (int i = 0; i < sections.length; i++) {
+            if (sections[i] != null && sections[i].name != null
+                && StrUtils.equals(sections[i].name, name)) return sections[i];
+        }
+        return null;
+    }
+
+    /** 从 shstrtab 区域读 '\0' 结尾字符串并 malloc 成 str；越界返回 null。 */
+    private static str readCString(byte[] data, long off, long limit) {
+        if (off < 0 || off >= limit || limit > (long) data.length) return null;
+        int start = (int) off;
+        int end = (int) limit;
+        if (end > data.length) end = (int) data.length;
+        int len = 0;
+        while (start + len < end && data[start + len] != 0) len += 1;
+        if (len == 0) return null;
+        str s = (str) Memory.malloc(len + 1);
+        for (int i = 0; i < len; i++) s[i] = data[start + i];
+        s[len] = (byte) 0;
+        return s;
+    }
+
+    private static int readU16(byte[] b, int off) -> (b[off] & 0xFF) | ((b[off + 1] & 0xFF) << 8)
+
+    private static int readU32(byte[] b, int off) ->
+        (b[off] & 0xFF) | ((b[off + 1] & 0xFF) << 8)
+             | ((b[off + 2] & 0xFF) << 16) | ((b[off + 3] & 0xFF) << 24)
+
+    private static long readU64(byte[] b, int off) {
+        long lo = readU32(b, off) & 0xFFFFFFFFL;
+        long hi = readU32(b, off + 4) & 0xFFFFFFFFL;
+        return lo | (hi << 32);
+    }
+}

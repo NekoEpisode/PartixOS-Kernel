@@ -5,6 +5,7 @@ ENTRY(kern_entry)
 SECTIONS
 {
     . = 0x80200000;
+    __kernel_image_start = .;
 
     .text : {
         *(.text.entry) *(.text*)
@@ -39,6 +40,7 @@ SECTIONS
         *(.bss*)
         __bss_end = .;
     }
+    __kernel_image_end = .;
 
     .debug_info         0 : { KEEP(*(.debug_info .gnu.linkonce.wi.*)) }
     .debug_abbrev       0 : { KEEP(*(.debug_abbrev)) }

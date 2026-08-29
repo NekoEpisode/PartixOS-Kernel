@@ -1,0 +1,125 @@
+package kr.partix.kernel.memory;
+
+import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.additional.collection.list.List;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * 4KB 页分配器（bitmap，C 实现 runtime/page_alloc.c）。
+ *
+ * init() 把 UEFI 内存图的 free 区域喂给 C 侧：先挖掉内核映像与初始
+ * heap（bootstrap bump 区）——这两块被 UEFI 报成 free 时不能分配，
+ * 而且 bitmap 自身内存取自第一块 free 区头部，绝不可是内核代码。
+ * 初始化后 kr_alloc 的堆自动可扩展：slab 块与大对象超出初始区域时
+ * 从页分配器取页。
+ */
+class PageAllocator {
+    private extern void page_alloc_init(long ranges, int count);
+    private extern void page_alloc_reserve(long start, long size);
+    private extern long page_alloc();
+    private extern long page_alloc_contig(int pages);
+    private extern void page_free(long addr);
+    private extern long page_alloc_total_pages();
+    private extern long page_alloc_free_pages();
+
+    private extern long kr_image_start;
+    private extern long kr_image_end;
+    private extern long kr_heap_start;
+    private extern long kr_heap_end;
+
+    private static final int PAGE = 4096;
+    private static final int MAX_SEGS = 256;
+
+    private static boolean inited = false;
+
+    static void init() {
+        if (inited) return;
+        // 早于 arch.init/StartupLogger——日志直接走裸 UART
+        List<MemoryMapEntry> ranges = MemoryMap.getFreeRanges();
+        int n = ranges.size();
+        if (n <= 0) {
+            BspKrMain.arch.getUart().println("[page allocator] no free memory ranges");
+            return;
+        }
+
+        // 收集 [start, end) 半开区间
+        long[] segs = new long[MAX_SEGS * 2];
+        int count = 0;
+        for (int i = 0; i < n; i++) {
+            MemoryMapEntry e = ranges.get(i);
+            long end = e.start + e.pages * PAGE;
+            if (count + 2 > MAX_SEGS * 2) break;
+            segs[count * 2] = e.start;
+            segs[count * 2 + 1] = end;
+            count++;
+        }
+
+        // 挖洞：内核映像 + 初始 heap
+        count = carve(segs, count, kr_image_start, kr_image_end);
+        count = carve(segs, count, kr_heap_start, kr_heap_end);
+        if (count <= 0) {
+            BspKrMain.arch.getUart().println("[page allocator] no free memory after carve");
+            return;
+        }
+
+        long[] data = new long[count * 2];
+        for (int i = 0; i < count; i++) {
+            long s = segs[i * 2];
+            long e = segs[i * 2 + 1];
+            data[i * 2] = s;
+            data[i * 2 + 1] = (e - s) / PAGE;
+        }
+        page_alloc_init((long) data + 16, count);
+        Memory.free((long) data);
+
+        // 冗余防御：C 侧再标一次已占用（bitmap 之外的区域）
+        page_alloc_reserve(kr_image_start, kr_image_end - kr_image_start);
+        page_alloc_reserve(kr_heap_start, kr_heap_end - kr_heap_start);
+        inited = true;
+
+        long total = page_alloc_total_pages();
+        long free = page_alloc_free_pages();
+        StrBuilder sb = new StrBuilder();
+        sb.append("[page allocator] ");
+        sb.append(StrUtils.toDec((int) (free * 4 / 1024)));
+        sb.append(" MiB free of ");
+        sb.append(StrUtils.toDec((int) (total * 4 / 1024)));
+        sb.append(" MiB");
+        str msg = sb.build();
+        BspKrMain.arch.getUart().println(msg);
+        Memory.free(msg);
+        sb.dispose();
+    }
+
+    /** 从 [start,end) 区间列表中挖掉 [carveStart,carveEnd)，返回剩余段数。 */
+    private static int carve(long[] segs, int count, long carveStart, long carveEnd) {
+        long[] tmp = new long[MAX_SEGS * 2];
+        int out = 0;
+        for (int i = 0; i < count; i++) {
+            long s = segs[i * 2];
+            long e = segs[i * 2 + 1];
+            if (e <= carveStart || s >= carveEnd) {
+                if (out + 2 <= MAX_SEGS * 2) {
+                    tmp[out * 2] = s;
+                    tmp[out * 2 + 1] = e;
+                    out++;
+                }
+                continue;
+            }
+            if (s < carveStart && out + 2 <= MAX_SEGS * 2) {
+                tmp[out * 2] = s;
+                tmp[out * 2 + 1] = carveStart;
+                out++;
+            }
+            if (e > carveEnd && out + 2 <= MAX_SEGS * 2) {
+                tmp[out * 2] = carveEnd;
+                tmp[out * 2 + 1] = e;
+                out++;
+            }
+        }
+        for (int i = 0; i < out * 2; i++) segs[i] = tmp[i];
+        return out;
+    }
+}

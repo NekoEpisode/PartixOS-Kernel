@@ -3,8 +3,17 @@
 #include "../runtime/allocator.h"
 
 // Heap region for the slab allocator (runtime/allocator.c).
+// The bump region is a bootstrap area; the page allocator extends the heap
+// past kr_heap_end once initialized (see runtime/page_alloc.c).
 uint64_t kr_heap_start = 0x81000000;
 uint64_t kr_heap_end  = 0x82000000;
+
+// Kernel image span (linker symbols __kernel_image_start/end): occupied
+// physical memory the page allocator must not hand out.
+extern char __kernel_image_start[];
+extern char __kernel_image_end[];
+uint64_t kr_image_start = (uint64_t)__kernel_image_start;
+uint64_t kr_image_end   = (uint64_t)__kernel_image_end;
 
 uint64_t kr_malloc(uint64_t size) { return kr_alloc(size); }
 void kr_free(uint64_t addr) { kr_dealloc(addr); }

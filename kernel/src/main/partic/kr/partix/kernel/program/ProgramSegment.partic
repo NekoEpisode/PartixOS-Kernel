@@ -1,0 +1,32 @@
+package kr.partix.kernel.program;
+
+/**
+ * 程序内存段描述（格式无关）。
+ *
+ * filesz 是文件里要拷贝的字节数，memsz >= filesz 时
+ * 多余部分（BSS）由加载方清零。
+ */
+class ProgramSegment {
+    static final int PF_X = 1;
+    static final int PF_W = 2;
+    static final int PF_R = 4;
+
+    final long vaddr;
+    final long offset;
+    final long filesz;
+    final long memsz;
+    final int flags;
+
+    ProgramSegment(long vaddr, long offset, long filesz, long memsz, int flags) {
+        this.vaddr = vaddr;
+        this.offset = offset;
+        this.filesz = filesz;
+        this.memsz = memsz;
+        this.flags = flags;
+    }
+
+    boolean isExecutable() -> (flags & PF_X) != 0
+    boolean isWritable() -> (flags & PF_W) != 0
+    boolean isReadable() -> (flags & PF_R) != 0
+    boolean needsZeroFill() -> memsz > filesz
+}

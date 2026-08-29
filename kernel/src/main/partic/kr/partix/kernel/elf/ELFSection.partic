@@ -1,0 +1,32 @@
+package kr.partix.kernel.elf;
+
+/**
+ * ELF 节（section header 条目）。
+ * 符号表（.symtab）、字符串表（.strtab）、调试段等都在节层面。
+ */
+class ELFSection {
+    static final int SHT_PROGBITS = 1;
+    static final int SHT_SYMTAB = 2;
+    static final int SHT_STRTAB = 3;
+    static final int SHT_RELA = 4;
+    static final int SHT_NOBITS = 8;
+    static final int SHT_DYNSYM = 11;
+
+    final str name;
+    final int type;
+    final long flags;
+    final long addr;
+    final long offset;
+    final long size;
+
+    ELFSection(str name, int type, long flags, long addr, long offset, long size) {
+        this.name = name;
+        this.type = type;
+        this.flags = flags;
+        this.addr = addr;
+        this.offset = offset;
+        this.size = size;
+    }
+
+    boolean isSymbolTable() -> type == SHT_SYMTAB || type == SHT_DYNSYM
+}

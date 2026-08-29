@@ -1,0 +1,17 @@
+package kr.partix.kernel.process;
+
+import lang.partic.stdlib.additional.collection.list.ArrayList;
+import lang.partic.stdlib.additional.collection.list.List;
+import kr.partix.kernel.boxes.IntegerBox;
+
+class ProcessManager {
+    private static final List<IntegerBox> processes = new ArrayList<IntegerBox>(); // pid
+
+    /* 创建进程并加入到processes中 */
+    static Process createProcess(ProcessMeta meta) {
+        Process process = new Process(meta.name(), meta.program(), meta.threads());
+        process.pid(processes.size());
+        processes.add(process);
+        return process;
+    }
+}

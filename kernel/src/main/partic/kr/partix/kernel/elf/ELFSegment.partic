@@ -1,0 +1,33 @@
+package kr.partix.kernel.elf;
+
+/**
+ * ELF 程序段（program header 条目）。
+ * 可执行文件里需要落内存的"代码块"就是 type==PT_LOAD 的段。
+ */
+class ELFSegment {
+    static final int PT_LOAD = 1;
+    static final int PF_X = 1;
+    static final int PF_W = 2;
+    static final int PF_R = 4;
+
+    final int type;
+    final int flags;
+    final long offset;
+    final long vaddr;
+    final long filesz;
+    final long memsz;
+
+    ELFSegment(int type, int flags, long offset, long vaddr, long filesz, long memsz) {
+        this.type = type;
+        this.flags = flags;
+        this.offset = offset;
+        this.vaddr = vaddr;
+        this.filesz = filesz;
+        this.memsz = memsz;
+    }
+
+    boolean isLoad() -> type == PT_LOAD
+    boolean isExecutable() -> (flags & PF_X) != 0
+    boolean isWritable() -> (flags & PF_W) != 0
+    boolean isReadable() -> (flags & PF_R) != 0
+}

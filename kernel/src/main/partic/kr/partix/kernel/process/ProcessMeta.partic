@@ -1,0 +1,21 @@
+package kr.partix.kernel.process;
+
+import kr.partix.kernel.program.IProgram;
+import lang.partic.stdlib.additional.collection.list.List;
+import kr.partix.kernel.arch.thread.Thread;
+
+class ProcessMeta {
+    private final str name;
+    private final IProgram program;
+    private final List<Thread> threads;
+
+    protected ProcessMeta(str name, IProgram program, List<Thread> threads) {
+        this.threads = threads;
+        this.name = name;
+        this.program = program;
+    }
+
+    str name() -> name
+    IProgram program() -> program
+    List<Thread> threads() -> threads
+}

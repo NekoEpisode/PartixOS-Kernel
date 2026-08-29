@@ -1,0 +1,41 @@
+package kr.partix.kernel.elf;
+
+import kr.partix.kernel.program.IProgram;
+import kr.partix.kernel.program.ProgramSegment;
+
+/**
+ * ELF 程序镜像（IProgram 适配）：把 ELF 的 LOAD 段转成通用段描述。
+ */
+class ELFProgram implements IProgram {
+    private final ELF elf;
+    private ProgramSegment[] segments;
+
+    ELFProgram(ELF elf) {
+        this.elf = elf;
+    }
+
+    long getEntry() -> elf.getEntry()
+
+    int getMachine() -> elf.getMachine()
+
+    ProgramSegment[] getSegments() {
+        if (segments != null) return segments;
+        ELFSegment[] src = elf.getSegments();
+        int n = 0;
+        for (int i = 0; i < src.length; i++) {
+            if (src[i] != null && src[i].isLoad()) n++;
+        }
+        ProgramSegment[] out = new ProgramSegment[n];
+        int k = 0;
+        for (int i = 0; i < src.length; i++) {
+            if (src[i] != null && src[i].isLoad()) {
+                out[k] = new ProgramSegment(src[i].vaddr, src[i].offset,
+                                            src[i].filesz, src[i].memsz,
+                                            src[i].flags);
+                k++;
+            }
+        }
+        segments = out;
+        return segments;
+    }
+}

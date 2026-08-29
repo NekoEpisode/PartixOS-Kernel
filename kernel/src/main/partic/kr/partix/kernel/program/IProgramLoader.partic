@@ -1,0 +1,18 @@
+package kr.partix.kernel.program;
+
+/**
+ * 程序加载器抽象——每种文件格式一个实现。
+ *
+ * matches() 用 magic/头部字节做格式检测（注册表按它自动选加载器）；
+ * load() 解析数据为 IProgram，失败返回 null。
+ */
+interface IProgramLoader {
+    /** 检测数据是否为本加载器支持的格式。 */
+    boolean matches(byte[] data);
+
+    /** 解析程序镜像；格式错误/截断返回 null。 */
+    IProgram load(byte[] data);
+
+    /** 格式名（日志/诊断用），如 "elf"。 */
+    str getFormatName();
+}

@@ -3,10 +3,14 @@ package kr.partix.kernel.main.inits;
 import kr.partix.kernel.fs.fat32.Fat32;
 import kr.partix.kernel.fs.vfs.DEntry;
 import kr.partix.kernel.fs.vfs.FileMode;
+import kr.partix.kernel.fs.vfs.INode;
 import kr.partix.kernel.fs.vfs.VFS;
 import kr.partix.kernel.io.disk.DiskRegistry;
 import kr.partix.kernel.io.disk.IDisk;
 import kr.partix.kernel.io.disk.PartitionDisk;
+import kr.partix.kernel.elf.ELF;
+import kr.partix.kernel.elf.ELFSegment;
+import kr.partix.kernel.elf.ELFSection;
 import kr.partix.kernel.log.StartupLogger;
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
@@ -51,7 +55,7 @@ class FSInit {
             int n = VFS.read(fd, hdr, 16);
             StrBuilder sb = new StrBuilder();
             sb.append("read /KERNEL.ELF: ");
-            str ns = StrUtils.toDec(n);
+            str ns = StrUtils.longToStr(n);
             sb.append(ns);
             Memory.free(ns);
             sb.append(" bytes, magic=");
@@ -66,8 +70,99 @@ class FSInit {
             sb.dispose();
             Memory.free((long) hdr);
             VFS.close(fd);
+
+            verifyKernelELF();
         } else {
             StartupLogger.error("open /KERNEL.ELF failed");
         }
+    }
+
+    /** 读整个 KERNEL.ELF 用 ELFLoader 解析，验证解析器（临时验证代码）。 */
+    private static void verifyKernelELF() {
+        INode kn = VFS.stat("/KERNEL.ELF");
+        if (kn == null || !kn.isFile() || kn.size < 64 || kn.size > 8L * 1024 * 1024) {
+            StartupLogger.error("elf verify: bad kernel file size");
+            return;
+        }
+        int fsize = (int) kn.size;
+        byte[] fbuf = new byte[fsize];
+        int fd = VFS.open("/KERNEL.ELF", FileMode.READ);
+        if (fd <= 0) {
+            StartupLogger.error("elf verify: open failed");
+            Memory.free((long) fbuf);
+            return;
+        }
+        int total = 0;
+        while (total < fsize) {
+            int r = VFS.read(fd, fbuf, fsize - total);
+            if (r <= 0) break;
+            total += r;
+        }
+        VFS.close(fd);
+        if (total != fsize) {
+            StartupLogger.error("elf verify: short read");
+            Memory.free((long) fbuf);
+            return;
+        }
+
+        ELF elf = ELF.parse(fbuf);
+        if (elf == null) {
+            StartupLogger.error("elf verify: parse failed");
+            Memory.free((long) fbuf);
+            return;
+        }
+
+        StrBuilder sb = new StrBuilder();
+        sb.append("elf verify: type=");
+        sb.append(StrUtils.longToStr(elf.getType()));
+        sb.append(" machine=");
+        sb.append(StrUtils.longToStr(elf.getMachine()));
+        sb.append(" entry=");
+        sb.append(StrUtils.toHex(elf.getEntry()));
+        sb.append(" segments=");
+        sb.append(StrUtils.longToStr(elf.getSegments().length));
+        sb.append(" sections=");
+        sb.append(StrUtils.longToStr(elf.getSections().length));
+        str m = sb.build();
+        StartupLogger.info(m);
+        Memory.free(m);
+        sb.dispose();
+
+        ELFSegment[] segs = elf.getSegments();
+        for (int i = 0; i < segs.length; i++) {
+            if (segs[i] == null || !segs[i].isLoad()) continue;
+            StrBuilder s2 = new StrBuilder();
+            s2.append("elf seg[");
+            s2.append(StrUtils.longToStr(i));
+            s2.append("] vaddr=");
+            s2.append(StrUtils.toHex(segs[i].vaddr));
+            s2.append(" filesz=");
+            s2.append(StrUtils.longToStr(segs[i].filesz));
+            s2.append(" memsz=");
+            s2.append(StrUtils.longToStr(segs[i].memsz));
+            s2.append(" flags=");
+            s2.append(StrUtils.longToStr(segs[i].flags));
+            str m2 = s2.build();
+            StartupLogger.info(m2);
+            Memory.free(m2);
+            s2.dispose();
+        }
+
+        ELFSection text = elf.findSection(".text");
+        if (text != null) {
+            StrBuilder s3 = new StrBuilder();
+            s3.append("elf .text addr=");
+            s3.append(StrUtils.toHex(text.addr));
+            s3.append(" size=");
+            s3.append(StrUtils.longToStr(text.size));
+            str m3 = s3.build();
+            StartupLogger.info(m3);
+            Memory.free(m3);
+            s3.dispose();
+        } else {
+            StartupLogger.warn("elf verify: .text not found");
+        }
+
+        Memory.free((long) fbuf);
     }
 }

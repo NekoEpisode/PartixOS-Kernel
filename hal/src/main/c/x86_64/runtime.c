@@ -8,6 +8,13 @@
 uint64_t kr_heap_start = 0x2000000;
 uint64_t kr_heap_end  = 0x4000000;   // 32 MiB
 
+// Kernel image span (linker symbols __kernel_image_start/end): occupied
+// physical memory the page allocator must not hand out.
+extern char __kernel_image_start[];
+extern char __kernel_image_end[];
+uint64_t kr_image_start = (uint64_t)__kernel_image_start;
+uint64_t kr_image_end   = (uint64_t)__kernel_image_end;
+
 uint64_t kr_malloc(uint64_t size) { return kr_alloc(size); }
 void kr_free(uint64_t addr) { kr_dealloc(addr); }
 
