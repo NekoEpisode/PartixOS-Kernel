@@ -24,6 +24,7 @@ void virtq_init(virtq_t *q, uint64_t desc_phys, uint64_t avail_phys,
     q->used  = (virtq_used_t  *)(uint64_t)used_phys;
     q->last_used_idx = 0;
     q->free_desc = 0;
+    q->queue_notify_off = 0;
 
     for (uint16_t i = 0; i < queue_size; i++) {
         q->desc[i].addr  = 0;

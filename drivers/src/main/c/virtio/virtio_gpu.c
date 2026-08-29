@@ -35,6 +35,7 @@ void virtio_gpu_dev_init(virtio_gpu_dev_t *dev,
     dev->cmdbuf = (virtio_gpu_ctrl_hdr_t *)(uint64_t)cmdbuf_phys;
     dev->respbuf_phys = respbuf_phys;
     dev->respbuf = (virtio_gpu_ctrl_hdr_t *)(uint64_t)respbuf_phys;
+    dev->controlq.queue_notify_off = virtio_pci_get_queue_notify_off(dev->common);
 }
 
 static int send_cmd(virtio_gpu_dev_t *dev, uint32_t cmd_type,

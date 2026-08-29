@@ -88,7 +88,6 @@ class VirtioGpuDriver implements IDisplayDriver {
     IScreen[] getScreens() -> screens == null ? new IScreen[0] : screens
 
     private void initDevice() {
-        StartupLogger.info("virtio-gpu: init start");
         IPCIIO pciio = BspKrMain.arch.getPciIo();
         int bus = device.bus;
         int slot = device.slot;
@@ -116,7 +115,6 @@ class VirtioGpuDriver implements IDisplayDriver {
                 bi++;
             }
         }
-        StartupLogger.info("virtio-gpu: bars read");
 
         int capHeader = pciio.readConfig32(bus, slot, func, 0x34);
         int cap = capHeader & 0xFF;
@@ -142,7 +140,6 @@ class VirtioGpuDriver implements IDisplayDriver {
 
             cap = capNext;
         }
-        StartupLogger.info("virtio-gpu: caps scanned");
         if (commonPhys == 0) return;
 
         virtio_pci_set_status(commonPhys, (byte)0);
@@ -164,6 +161,15 @@ class VirtioGpuDriver implements IDisplayDriver {
         int qSize = virtio_pci_get_queue_size(commonPhys);
         if (qSize < 1) qSize = 256;
         if (qSize > 256) qSize = 256;
+        StrBuilder qsb = new StrBuilder();
+        qsb.append("virtio-gpu: queue_size=");
+        str qs = StrUtils.toDec(qSize);
+        qsb.append(qs);
+        Memory.free(qs);
+        str qMsg = qsb.build();
+        StartupLogger.info(qMsg);
+        Memory.free(qMsg);
+        qsb.dispose();
 
         long descSize  = (long)qSize * 16;
         long availSize = 4 + (long)qSize * 2 + 2;

@@ -55,6 +55,11 @@ void virtio_pci_disable_interrupts(void *common_cfg) {
     cfg->queue_msix_vector = 0xFFFF;
 }
 
+uint16_t virtio_pci_get_queue_notify_off(void *common_cfg) {
+    volatile virtio_pci_common_cfg_t *cfg = (volatile virtio_pci_common_cfg_t *)common_cfg;
+    return cfg->queue_notify_off;
+}
+
 uint8_t virtio_pci_isr_status(void *isr) {
     return *(volatile uint8_t *)isr;
 }

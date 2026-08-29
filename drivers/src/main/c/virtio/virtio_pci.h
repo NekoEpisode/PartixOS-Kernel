@@ -51,5 +51,6 @@ uint8_t virtio_pci_get_status(void *common_cfg);
 uint32_t virtio_pci_get_features(void *common_cfg);
 void virtio_pci_set_features(void *common_cfg, uint32_t features);
 void virtio_pci_disable_interrupts(void *common_cfg);
+uint16_t virtio_pci_get_queue_notify_off(void *common_cfg);
 
 #endif
