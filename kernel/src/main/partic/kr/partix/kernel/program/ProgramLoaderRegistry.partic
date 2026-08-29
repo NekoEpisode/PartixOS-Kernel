@@ -1,5 +1,9 @@
 package kr.partix.kernel.program;
 
+import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+
 /**
  * 程序加载器注册表：按 magic 自动选择加载器。
  *
@@ -18,11 +22,34 @@ class ProgramLoaderRegistry {
     /** 按格式自动加载；无匹配加载器或解析失败返回 null。 */
     static IProgram load(byte[] data) {
         if (data == null) return null;
+        // 调试插桩：定位加载路径
+        StrBuilder sb = new StrBuilder();
+        sb.append("[dbg] registry.load enter count=");
+        sb.append(StrUtils.longToStr((long) count));
+        str out = sb.build();
+        BspKrMain.arch.getUart().println(out);
+        sb.dispose();
         for (int i = 0; i < count; i++) {
-            if (loaders[i] != null && loaders[i].matches(data)) {
-                return loaders[i].load(data);
+            boolean m = loaders[i] != null && loaders[i].matches(data);
+            StrBuilder sb1 = new StrBuilder();
+            sb1.append("[dbg] loader ");
+            sb1.append(StrUtils.longToStr((long) i));
+            sb1.append(" matches=");
+            sb1.append(StrUtils.longToStr((long) (m ? 1 : 0)));
+            str out1 = sb1.build();
+            BspKrMain.arch.getUart().println(out1);
+            sb1.dispose();
+            if (m) {
+                IProgram p = loaders[i].load(data);
+                if (p != null) {
+                    BspKrMain.arch.getUart().println("[dbg] loader result non-null");
+                } else {
+                    BspKrMain.arch.getUart().println("[dbg] loader result null");
+                }
+                return p;
             }
         }
+        BspKrMain.arch.getUart().println("[dbg] registry.load no match");
         return null;
     }
 }

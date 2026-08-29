@@ -1,0 +1,27 @@
+package kr.partix.kernel.program;
+
+import kr.partix.kernel.sys.System;
+
+/**
+ * 内嵌程序源：构建期把用户测试程序 ELF 以 .incbin 打进内核映像，
+ * 通过符号暴露起止地址，运行时拷成 byte[] 交给 ProgramLoaderRegistry。
+ */
+class EmbeddedPrograms {
+    private extern long embedded_user_test_start;
+    private extern long embedded_user_test_size;
+
+    /** 诊断用：原始符号值。 */
+    static long testStart() -> embedded_user_test_start
+    static long testSize() -> embedded_user_test_size
+
+    static byte[] loadUserTest() {
+        long addr = embedded_user_test_start;
+        long size = embedded_user_test_size;
+        if (size <= 0 || size > 0x100000) return null;
+        byte[] data = new byte[(int) size];
+        for (int i = 0; i < (int) size; i++) {
+            data[i] = System.read8(addr + i);
+        }
+        return data;
+    }
+}

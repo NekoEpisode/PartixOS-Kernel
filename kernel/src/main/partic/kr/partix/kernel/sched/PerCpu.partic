@@ -1,0 +1,25 @@
+package kr.partix.kernel.sched;
+
+/**
+ * 每 CPU 调度状态。当前只有 BSP（id=0）；SMP 到来时按 cpu id 建数组即可，
+ * 调度算法无需改动。
+ */
+class PerCpu {
+    private final int id;
+    private Thread current;
+    private Thread idle;
+
+    PerCpu(int id) {
+        this.id = id;
+    }
+
+    int id() -> id
+    Thread current() -> current
+    void current(Thread t) {
+        current = t;
+    }
+    Thread idle() -> idle
+    void idle(Thread t) {
+        idle = t;
+    }
+}

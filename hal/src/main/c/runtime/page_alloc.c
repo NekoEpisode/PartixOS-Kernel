@@ -49,11 +49,19 @@ void page_alloc_init(const uint64_t *ranges, int count) {
     span_start = min_start;
     span_pages = (max_end - min_start) / PAGE_SIZE;
 
-    // Bitmap storage: head of the first free range (assume it is large).
+    // Bitmap storage: take it from the first range large enough to host it.
+    // (The first range in mmap order may be tiny — e.g. x86's [0x0, 1 page].)
     uint64_t bm_bytes = (span_pages + 7) / 8;
     uint64_t bm_pages = (bm_bytes + PAGE_SIZE - 1) / PAGE_SIZE;
-    if (ranges[1] < bm_pages) return;  // first range too small
-    bitmap = (uint8_t *)(uintptr_t)ranges[0];
+    int bm_idx = -1;
+    for (int i = 0; i < count; i++) {
+        if (ranges[i * 2 + 1] >= bm_pages) {
+            bm_idx = i;
+            break;
+        }
+    }
+    if (bm_idx < 0) return;  // no range big enough for the bitmap
+    bitmap = (uint8_t *)(uintptr_t)ranges[bm_idx * 2];
 
     // Default occupied; clear the free ranges.
     for (uint64_t i = 0; i < bm_bytes; i++) bitmap[i] = 0xFF;
@@ -63,8 +71,9 @@ void page_alloc_init(const uint64_t *ranges, int count) {
         uint64_t first = (s - span_start) / PAGE_SIZE;
         for (uint64_t j = 0; j < p; j++) bit_clr(first + j);
     }
-    // Bitmap storage pages are occupied.
-    for (uint64_t i = 0; i < bm_pages; i++) bit_set(i);
+    // Bitmap storage pages are occupied (relative to span_start).
+    uint64_t bm_first = (ranges[bm_idx * 2] - span_start) / PAGE_SIZE;
+    for (uint64_t i = 0; i < bm_pages; i++) bit_set(bm_first + i);
 
     total_pages = 0;
     free_pages = 0;

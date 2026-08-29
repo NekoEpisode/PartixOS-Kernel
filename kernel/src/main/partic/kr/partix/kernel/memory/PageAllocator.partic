@@ -24,10 +24,18 @@ class PageAllocator {
     private extern long page_alloc_total_pages();
     private extern long page_alloc_free_pages();
 
+    /** 分配单个 4KB 页。 */
+    static long allocPage() -> page_alloc()
+
+    /** 分配连续页（如线程内核栈）。 */
+    static long allocPages(int pages) -> page_alloc_contig(pages)
+
     private extern long kr_image_start;
     private extern long kr_image_end;
     private extern long kr_heap_start;
     private extern long kr_heap_end;
+    private extern long kr_stack_bottom;
+    private extern long kr_stack_top;
 
     private static final int PAGE = 4096;
     private static final int MAX_SEGS = 256;
@@ -56,9 +64,12 @@ class PageAllocator {
             count++;
         }
 
-        // 挖洞：内核映像 + 初始 heap
+        // 挖洞：内核映像 + 初始 heap + 启动栈区域（x86：0x300000 附近）
         count = carve(segs, count, kr_image_start, kr_image_end);
         count = carve(segs, count, kr_heap_start, kr_heap_end);
+        count = carve(segs, count, kr_stack_bottom, kr_stack_top);
+        // 空指针页（物理 0x0-0xFFF）不对外分配
+        count = carve(segs, count, 0, 4096);
         if (count <= 0) {
             BspKrMain.arch.getUart().println("[page allocator] no free memory after carve");
             return;
@@ -77,6 +88,8 @@ class PageAllocator {
         // 冗余防御：C 侧再标一次已占用（bitmap 之外的区域）
         page_alloc_reserve(kr_image_start, kr_image_end - kr_image_start);
         page_alloc_reserve(kr_heap_start, kr_heap_end - kr_heap_start);
+        page_alloc_reserve(kr_stack_bottom, kr_stack_top - kr_stack_bottom);
+        page_alloc_reserve(0, 4096);
         inited = true;
 
         long total = page_alloc_total_pages();

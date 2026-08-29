@@ -1,10 +1,21 @@
 package kr.partix.kernel.interrupt;
 
 import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
 
+/**
+ * asm 与 Partic 之间的中断桥。
+ * 先把当前线程的上下文帧记入 TCB，再交给架构控制器分发；
+ * 返回要恢复的帧（0 → 保持原帧）。
+ */
 class InterruptBridge {
-    static void dispatch(long cause, long epc, long sp, long frame) {
+    static long dispatch(long cause, long epc, long sp, long frame) {
+        Thread cur = Scheduler.current();
+        if (cur != null) cur.savedFrame(frame);
         IInterruptController c = BspKrMain.arch.getInterruptController();
-        c.dispatch(cause, epc, sp, frame);
+        long next = c.dispatch(cause, epc, sp, frame);
+        if (next != 0) return next;
+        return frame;
     }
 }

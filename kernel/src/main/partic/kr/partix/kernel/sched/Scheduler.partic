@@ -1,0 +1,264 @@
+package kr.partix.kernel.sched;
+
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.paging.IPageTableManager;
+import kr.partix.kernel.process.Process;
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.timer.Timer;
+import lang.partic.stdlib.additional.collection.list.ArrayList;
+import lang.partic.stdlib.additional.collection.list.List;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+
+/**
+ * 调度器门面：机制层（当前线程、空闲线程、切换、睡眠唤醒），
+ * 策略层（IScheduler）只决定下一个线程。
+ * 切换统一走"恢复帧"路径：中断/trap 由 dispatch 返回 nextFrame，
+ * 主动切换（yield/sleep/exit）由 switch_frame 构造帧后恢复。
+ */
+class Scheduler {
+    static final int QUANTUM = 2;   // 每个线程的时间片（tick 数）
+
+    private static PerCpu[] cpus = new PerCpu[1];
+    private static IScheduler policy;
+    private static List<SleepEntry> sleeping = new ArrayList<SleepEntry>();
+    private static long lastRoot = -1;
+    private static boolean started = false;
+
+    static void init(IScheduler s) {
+        policy = s;
+        cpus[0] = new PerCpu(0);
+        cpus[0].idle(createIdleThread());
+    }
+
+    static PerCpu cpu() -> cpus[0]
+
+    /** 当前线程；调度器未初始化（如 x86 引导期）时返回 null。 */
+    static Thread current() {
+        PerCpu c = cpu();
+        if (c == null) return null;
+        return c.current();
+    }
+    static void setCurrent(Thread t) {
+        cpu().current(t);
+    }
+    static Thread idle() {
+        PerCpu c = cpu();
+        if (c == null) return null;
+        return c.idle();
+    }
+
+    /** 入队并置为 READY。 */
+    static void add(Thread t) {
+        t.state(ThreadState.READY);
+        t.ticksLeft(QUANTUM);
+        policy.add(t);
+    }
+
+    /** 启动调度器：切入第一个线程，永不返回。 */
+    static void start() {
+        System.stopInterrupts();
+        started = true;
+        Thread first = policy.next();
+        if (first == null) first = idle();
+        setCurrent(first);
+        Threads.setCurrentKstack(first.kernelStackTop());
+        first.state(ThreadState.RUNNING);
+        first.ticksLeft(QUANTUM);
+        switchAddressSpace(first);
+        // tid 0 为 scratch 槽，启动上下文被保存后弃用
+        Threads.switchFrame(0, first.savedFrame());
+        while (true) {
+            System.halt();
+        }
+    }
+
+    /** 定时器节拍：唤醒睡眠线程、扣除时间片，返回要恢复的帧（0 = 不变）。 */
+    static long onTick() {
+        // start() 之前禁止切换：引导期（非线程上下文）不允许被抢占
+        if (policy == null || !started) return 0;
+        wakeSleepers();
+        Thread cur = current();
+        if (cur == null) return switchFrameOr0();
+        if (cur == idle()) return switchFrameOr0();
+        cur.ticksLeft(cur.ticksLeft() - 1);
+        if (cur.ticksLeft() <= 0) {
+            cur.state(ThreadState.READY);
+            policy.add(cur);
+            return switchFrameOr0();
+        }
+        return 0;
+    }
+
+    /** 中断路径：当前线程不再可运行（退出/阻塞/让出）时切换。 */
+    static long onReschedule() {
+        if (policy == null || !started) return 0;
+        Thread cur = current();
+        if (cur != null && cur.state() == ThreadState.RUNNING) return 0;
+        return switchFrameOr0();
+    }
+
+    /** 主动让出 CPU（内核线程调用，非中断上下文）。 */
+    static void yield() {
+        Thread cur = current();
+        if (cur == null) return;
+        cur.state(ThreadState.READY);
+        policy.add(cur);
+        switchToNext();
+    }
+
+    /** 睡眠（毫秒）。 */
+    static void sleep(long ms) {
+        Thread cur = current();
+        if (cur == null) return;
+        cur.state(ThreadState.BLOCKED);
+        cur.sleepWakeTick(Timer.getTicks() + ms * Timer.TICK_HZ / 1000);
+        sleeping.add(new SleepEntry(cur, cur.sleepWakeTick()));
+        switchToNext();
+    }
+
+    /** 结束当前线程（内核线程主动退出，不返回）。 */
+    static void exit(long code) {
+        Thread cur = current();
+        if (cur == null) return;
+        cur.state(ThreadState.TERMINATED);
+        cur.exitCode((int) code);
+        switchToNext();
+    }
+
+    /** 中断上下文：标记当前线程终止（如用户态故障），由 onReschedule 完成切换。 */
+    static void sysExit(long code) {
+        Thread cur = current();
+        if (cur == null) return;
+        cur.state(ThreadState.TERMINATED);
+        cur.exitCode((int) code);
+    }
+
+    static void sysYield() {
+        Thread cur = current();
+        if (cur == null) return;
+        cur.state(ThreadState.READY);
+        policy.add(cur);
+    }
+
+    static void sysSleep(long ms) {
+        Thread cur = current();
+        if (cur == null) return;
+        cur.state(ThreadState.BLOCKED);
+        cur.sleepWakeTick(Timer.getTicks() + ms * Timer.TICK_HZ / 1000);
+        sleeping.add(new SleepEntry(cur, cur.sleepWakeTick()));
+    }
+
+    static Thread createKernelThread(KernelRunnable r) -> Thread.createKernel(null, r)
+
+    static Thread createUserThread(Process owner, long userEntry, long userStackTop) ->
+        Thread.createUser(owner, userEntry, userStackTop)
+
+    private static Thread createIdleThread() {
+        Thread t = new Thread(null, Threads.idleEntryStub(), 0, 0, 0);
+        t.state(ThreadState.RUNNING);
+        return t;
+    }
+
+    /** 主动切换（内核线程上下文）：构造当前帧并恢复下一个线程的帧。 */
+    private static void switchToNext() {
+        System.stopInterrupts();
+        Thread cur = current();
+        Thread next = policy.next();
+        if (next == null) next = idle();
+        if (next == cur) {
+            // yield 且无其他可运行线程：收回继续跑，避免重复入队
+            cur.state(ThreadState.RUNNING);
+            return;
+        }
+        setCurrent(next);
+        Threads.setCurrentKstack(next.kernelStackTop());
+        next.state(ThreadState.RUNNING);
+        next.ticksLeft(QUANTUM);
+        switchAddressSpace(next);
+        // 诊断插桩（临时）：切到用户线程时打印帧信息（排查 sscratch 错值）
+        if (next.owner() != null) {
+            StrBuilder dsb = new StrBuilder();
+            dsb.append("[launch] tid=");
+            dsb.append(StrUtils.longToStr((long) next.tid()));
+            dsb.append(" savedF=");
+            dsb.append(StrUtils.toHex(next.savedFrame()));
+            dsb.append(" f33=");
+            dsb.append(StrUtils.toHex(System.read64(next.savedFrame() + 264)));
+            dsb.append(" f32=");
+            dsb.append(StrUtils.toHex(System.read64(next.savedFrame() + 256)));
+            str dout = dsb.build();
+            BspKrMain.arch.getUart().println(dout);
+            dsb.dispose();
+        }
+        Threads.switchFrame(cur.tid(), next.savedFrame());
+    }
+
+    /** 中断上下文切换：返回下一个线程的帧，或 0（不切换）。 */
+    private static long switchFrameOr0() {
+        Thread next = policy.next();
+        if (next == null) next = idle();
+        Thread cur = current();
+        if (next == cur) {
+            // 只有自己可跑：收回运行态并重置时间片，避免重复入队
+            cur.state(ThreadState.RUNNING);
+            cur.ticksLeft(QUANTUM);
+            return 0;
+        }
+        setCurrent(next);
+        Threads.setCurrentKstack(next.kernelStackTop());
+        next.state(ThreadState.RUNNING);
+        next.ticksLeft(QUANTUM);
+        switchAddressSpace(next);
+        // 诊断插桩（临时）：同上
+        if (next.owner() != null) {
+            StrBuilder dsb = new StrBuilder();
+            dsb.append("[launch] tid=");
+            dsb.append(StrUtils.longToStr((long) next.tid()));
+            dsb.append(" savedF=");
+            dsb.append(StrUtils.toHex(next.savedFrame()));
+            dsb.append(" f33=");
+            dsb.append(StrUtils.toHex(System.read64(next.savedFrame() + 264)));
+            dsb.append(" f32=");
+            dsb.append(StrUtils.toHex(System.read64(next.savedFrame() + 256)));
+            str dout = dsb.build();
+            BspKrMain.arch.getUart().println(dout);
+            dsb.dispose();
+        }
+        return next.savedFrame();
+    }
+
+    private static void switchAddressSpace(Thread next) {
+        IPageTableManager ptm = BspKrMain.arch.getPageTableManager();
+        long root;
+        if (next.owner() == null) root = ptm.getKernelRoot();
+        else root = next.owner().addressSpace().root();
+        if (root != lastRoot) {
+            ptm.loadRoot(root);
+            lastRoot = root;
+            // 调试插桩（临时）：确认地址空间切换
+            StrBuilder asb = new StrBuilder();
+            asb.append("[as] load root=");
+            asb.append(StrUtils.toHex(root));
+            str aout = asb.build();
+            BspKrMain.arch.getUart().println(aout);
+            asb.dispose();
+        }
+    }
+
+    private static void wakeSleepers() {
+        long now = Timer.getTicks();
+        int i = 0;
+        while (i < sleeping.size()) {
+            SleepEntry e = sleeping.get(i);
+            if (e.wakeTick <= now) {
+                sleeping.removeAt(i);
+                e.thread.state(ThreadState.READY);
+                e.thread.ticksLeft(QUANTUM);
+                policy.add(e.thread);
+            } else {
+                i += 1;
+            }
+        }
+    }
+}

@@ -1,0 +1,32 @@
+package kr.partix.kernel.main;
+
+import kr.partix.kernel.sched.KernelRunnable;
+import kr.partix.kernel.sched.Scheduler;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.core.memory.Memory;
+
+/** 内核测试线程：周期性打印计数，验证主动睡眠切换与定时器抢占。 */
+class CountRunnable extends KernelRunnable {
+    private final str name;
+    private long count = 0;
+
+    CountRunnable(str name) {
+        this.name = name;
+    }
+
+    void run() {
+        while (true) {
+            StrBuilder sb = new StrBuilder();
+            sb.append("[kthread ");
+            sb.append(name);
+            sb.append("] count=");
+            sb.appendLong(count);
+            str out = sb.build();
+            BspKrMain.arch.getUart().println(out);
+            Memory.free(out);
+            sb.dispose();
+            count += 1;
+            Scheduler.sleep(500);
+        }
+    }
+}

@@ -1,0 +1,14 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.sys.System;
+
+/** write(fd, buf, len)：暂忽略 fd，输出到主 UART。 */
+class SysWrite implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        for (long i = 0; i < a2; i++) {
+            BspKrMain.arch.getUart().print(System.read8(a1 + i));
+        }
+        return a2;
+    }
+}

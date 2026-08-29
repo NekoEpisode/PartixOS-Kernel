@@ -1,0 +1,6 @@
+package kr.partix.kernel.syscall;
+
+/** 系统调用处理器接口：每个系统调用一个实现类，注册到 Syscall 分发器。 */
+interface ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5);
+}

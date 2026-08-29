@@ -1,0 +1,26 @@
+package kr.partix.kernel.sched;
+
+/** HAL 线程原语桥：上下文切换与线程帧存取。 */
+class Threads {
+    private extern void thread_switch_frame(long tid, long newFrame);
+    private extern long thread_frame_get(long tid);
+    private extern void thread_frame_set(long tid, long frame);
+    private extern long kthread_entry_stub_addr;
+    private extern long idle_entry_stub_addr;
+    private extern void g_current_kstack_top_set(long top);
+
+    static void switchFrame(long tid, long newFrame) {
+        thread_switch_frame(tid, newFrame);
+    }
+    static long getFrame(long tid) -> thread_frame_get(tid)
+    static void setFrame(long tid, long frame) {
+        thread_frame_set(tid, frame);
+    }
+    static long entryStub() -> kthread_entry_stub_addr
+    static long idleEntryStub() -> idle_entry_stub_addr
+
+    /** 记录当前线程内核栈顶（x86 ISR/syscall 入口用；riscv 为 no-op）。 */
+    static void setCurrentKstack(long top) {
+        g_current_kstack_top_set(top);
+    }
+}

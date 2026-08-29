@@ -6,9 +6,13 @@ import kr.partix.kernel.main.inits.DeviceInit;
 import kr.partix.kernel.main.inits.DiskInit;
 import kr.partix.kernel.main.inits.FSInit;
 import kr.partix.kernel.program.ProgramLoaderRegistry;
+import kr.partix.kernel.syscall.Syscall;
 
 class SystemInit {
     static void init() {
+        // 系统调用注册
+        Syscall.init();
+
         // 程序加载格式注册（magic 自动检测）
         ProgramLoaderRegistry.register(new ELFProgramLoader());
 

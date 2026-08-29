@@ -1,15 +1,17 @@
 package kr.partix.kernel.process;
 
+import kr.partix.kernel.paging.AddressSpace;
 import kr.partix.kernel.program.IProgram;
 import lang.partic.stdlib.additional.collection.list.List;
-import kr.partix.kernel.arch.thread.Thread;
+import kr.partix.kernel.sched.Thread;
 
 class Process {
     private final str name;
     private final IProgram program;
     private final List<Thread> threads; // get(tid) 进程中唯一
-
+    private AddressSpace addressSpace;
     private long pid = -1;
+    private int exitCode = -1;
 
     Process(str name, IProgram program, List<Thread> threads) {
         this.name = name;
@@ -20,9 +22,16 @@ class Process {
     void pid(long pid) {
         this.pid = pid;
     }
-
     long pid() -> pid
     str name() -> name
     IProgram program() -> program
     List<Thread> threads() -> threads
+    AddressSpace addressSpace() -> addressSpace
+    void addressSpace(AddressSpace as) {
+        addressSpace = as;
+    }
+    int exitCode() -> exitCode
+    void exitCode(int c) {
+        exitCode = c;
+    }
 }

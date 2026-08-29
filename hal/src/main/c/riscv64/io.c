@@ -8,8 +8,9 @@ void enableInterrupts() {
 }
 
 void stopInterrupts() {
-    // Disable all supervisor interrupt sources, including the timer.
-    __asm__ volatile("csrw sie, zero");
+    // 只关全局中断门控（sstatus.SIE），不动 sie（各中断源使能）。
+    // 线程切换依赖此语义：切换后由 sret 恢复 sstatus(SPIE=1) 重新开中断；
+    // 若清掉 sie，定时器等源将永久失效。
     __asm__ volatile("csrci sstatus, 0x2");
 }
 

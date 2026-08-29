@@ -1,0 +1,22 @@
+package kr.partix.kernel.sched;
+
+class ThreadManager {
+    static final int MAX_THREADS = 256;
+
+    private static final Thread[] table = new Thread[MAX_THREADS];
+    private static int nextTid = 1;
+
+    static int allocateTid() {
+        int t = nextTid;
+        nextTid += 1;
+        if (nextTid >= MAX_THREADS) nextTid = 1;
+        return t;
+    }
+
+    static void register(Thread t) {
+        if (t == null) return;
+        table[t.tid()] = t;
+    }
+
+    static Thread get(int tid) -> table[tid]
+}

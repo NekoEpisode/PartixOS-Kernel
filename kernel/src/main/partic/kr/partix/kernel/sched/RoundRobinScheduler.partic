@@ -1,0 +1,25 @@
+package kr.partix.kernel.sched;
+
+import lang.partic.stdlib.additional.collection.list.ArrayList;
+import lang.partic.stdlib.additional.collection.list.List;
+
+/** 简单时间片轮转：FIFO 队列，next() 取出队首 READY 线程。 */
+class RoundRobinScheduler implements IScheduler {
+    private final List<Thread> queue = new ArrayList<Thread>();
+
+    void add(Thread t) {
+        queue.add(t);
+    }
+
+    void remove(Thread t) {
+        queue.remove(t);
+    }
+
+    Thread next() {
+        while (queue.size() > 0) {
+            Thread t = queue.removeAt(0);
+            if (t.state() == ThreadState.READY) return t;
+        }
+        return null;
+    }
+}

@@ -15,6 +15,10 @@ extern char __kernel_image_end[];
 uint64_t kr_image_start = (uint64_t)__kernel_image_start;
 uint64_t kr_image_end   = (uint64_t)__kernel_image_end;
 
+// Boot stack region: no-op on RISC-V (the boot stack is in the image .bss).
+uint64_t kr_stack_bottom = 0;
+uint64_t kr_stack_top    = 0;
+
 uint64_t kr_malloc(uint64_t size) { return kr_alloc(size); }
 void kr_free(uint64_t addr) { kr_dealloc(addr); }
 

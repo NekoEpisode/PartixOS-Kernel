@@ -281,83 +281,81 @@ ISR_NOERR 254
 ISR_NOERR 255
 
 # ── Common handler ──────────────────────────────
-# Deep interrupt handling (Partic dispatch -> EventBus -> StrBuilder/UART
-# printing) uses several KB of stack. Running it on the interrupted stack
-# clobbers the preempted frame's locals (e.g. BspKrMain's locals during
-# Hello). So isr_common switches to a dedicated interrupt stack first.
+# Saves the full context on the interrupted thread's kernel stack.
+# Frame layout (184 bytes, from rsp):
+#   +0..112  r15 r14 r13 r12 r11 r10 r9 r8 rbp rdi rsi rdx rcx rbx rax
+#   +120     vector
+#   +128     errcode
+#   +136     RIP
+#   +144     CS
+#   +152     RFLAGS
+#   +160     RSP
+#   +168     SS
+#   +176     kernel stack top (for TSS.RSP0 in the x86 milestone)
+# ring0 interrupts only push [RIP][CS][RFLAGS]; a synthetic SS(current)+RSP
+# is fabricated so iretq (64-bit, always pops/loads RSP/SS) restores exactly.
 .align 16
 isr_common:
-    # Switch to the interrupt stack; remember the interrupted stack pointer
-    # (which points at [vector][errcode][RIP][CS][RFLAGS][RSP][SS]).
-    movq %rsp, saved_rsp(%rip)
-    leaq int_stack_top(%rip), %rsp
-
-    pushq %rax
-    pushq %rbx
-    pushq %rcx
-    pushq %rdx
-    pushq %rsi
-    pushq %rdi
-    pushq %rbp
-    pushq %r8
-    pushq %r9
-    pushq %r10
-    pushq %r11
-    pushq %r12
-    pushq %r13
-    pushq %r14
+    # rsp → [vector][errcode][RIP][CS][RFLAGS]         (ring0)
+    #    or [vector][errcode][RIP][CS][RFLAGS][RSP][SS] (ring3)
+    pushq %rax                    # save interrupted rax; raw frame now at rsp+8
+    testb $3, 32(%rsp)            # CS RPL (raw CS at rsp+8+24)
+    jnz 1f
+    # ── ring0: rebuild with synthetic SS(current) + RSP(interrupted) ──
+    xorq %rax, %rax
+    mov  %ss, %ax
+    pushq %rax                    # SS   (+168)
+    leaq 56(%rsp), %rax           # interrupted rsp = rsp + 8(saved) + 40
+    pushq %rax                    # RSP  (+160)
+    pushq 56(%rsp)                # RFLAGS (raw +40)
+    pushq 56(%rsp)                # CS     (raw +32)
+    pushq 56(%rsp)                # RIP    (raw +24)
+    pushq 56(%rsp)                # errcode(raw +16)
+    pushq 56(%rsp)                # vector (raw +8)
+    jmp 2f
+1:
+    # ── ring3: rebuild the 7 raw slots ──
+    pushq 56(%rsp)                # SS     (raw +56)
+    pushq 56(%rsp)                # RSP    (raw +48)
+    pushq 56(%rsp)                # RFLAGS (raw +40)
+    pushq 56(%rsp)                # CS     (raw +32)
+    pushq 56(%rsp)                # RIP    (raw +24)
+    pushq 56(%rsp)                # errcode(raw +16)
+    pushq 56(%rsp)                # vector (raw +8)
+2:
+    # rsp → [vector][errcode][RIP][CS][RFLAGS][RSP][SS]; interrupted rax at rsp+56
+    # Save GP regs: r15 at +0, rax at +112
     pushq %r15
+    pushq %r14
+    pushq %r13
+    pushq %r12
+    pushq %r11
+    pushq %r10
+    pushq %r9
+    pushq %r8
+    pushq %rbp
+    pushq %rdi
+    pushq %rsi
+    pushq %rdx
+    pushq %rcx
+    pushq %rbx
+    movq 168(%rsp), %rax          # interrupted rax (rsp + 14*8 + 56)
+    pushq %rax
+
+    # kstack_top slot at +176
+    movq g_current_kstack_top(%rip), %rax
+    movq %rax, 176(%rsp)
 
     cld
 
-    # Interrupted frame lives on the main stack, referenced via saved_rsp:
-    #   +0 = vector, +8 = errcode, +16 = RIP, +24 = CS, +32 = RFLAGS, +40 = RSP
-    movq saved_rsp(%rip), %rax
+    # 诊断：临时短路 dispatch（不调用分发，直接恢复）——判定 NPE 是否来自分发路径
+    movq %rsp, %rax
+    jmp  restore_frame
+    # call kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJJ
 
-    # rdi = vector number
-    movq 0(%rax), %rdi
-
-    # rsi = epc = interrupted RIP
-    movq 16(%rax), %rsi
-
-    # rdx = sp = interrupted RSP (saved at +40)
-    leaq 40(%rax), %rdx
-
-    # rcx = frame = pointer to saved regs (on the interrupt stack)
-    movq %rsp, %rcx
-
-    call kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJV
-
-    popq %r15
-    popq %r14
-    popq %r13
-    popq %r12
-    popq %r11
-    popq %r10
-    popq %r9
-    popq %r8
-    popq %rbp
-    popq %rdi
-    popq %rsi
-    popq %rdx
-    popq %rcx
-    popq %rbx
-    popq %rax
-
-    # Back to the main stack, past vector + error code
-    movq saved_rsp(%rip), %rsp
-    addq $16, %rsp
-
-    iretq
-
-# ── Dedicated interrupt stack ───────────────────
-.section .bss
-.align 16
-int_stack_bottom:
-    .space 16384
-int_stack_top:
-saved_rsp:
-    .space 8
+    # Restore from the returned frame (same frame if no context switch)
+    movq %rax, %rsp
+    jmp  restore_frame
 
 # ── ISR handler pointer table ───────────────────
 .section .rodata

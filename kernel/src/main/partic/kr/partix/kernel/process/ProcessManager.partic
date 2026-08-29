@@ -1,16 +1,41 @@
 package kr.partix.kernel.process;
 
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.paging.AddressSpace;
+import kr.partix.kernel.program.IProgram;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
 import lang.partic.stdlib.additional.collection.list.ArrayList;
 import lang.partic.stdlib.additional.collection.list.List;
-import kr.partix.kernel.boxes.IntegerBox;
 
 class ProcessManager {
-    private static final List<IntegerBox> processes = new ArrayList<IntegerBox>(); // pid
+    private static final List<Process> processes = new ArrayList<Process>(); // pid
+    private static long nextPid = 1;
 
-    /* 创建进程并加入到processes中 */
+    /**
+     * 创建进程：建地址空间、映射程序段与用户栈、创建主线程并入调度。
+     * 返回 null 表示 meta 非法。
+     */
     static Process createProcess(ProcessMeta meta) {
-        Process process = new Process(meta.name(), meta.program(), meta.threads());
-        process.pid(processes.size());
+        if (meta == null) return null;
+        AddressSpace as = new AddressSpace(BspKrMain.arch.getPageTableManager());
+        IProgram prog = meta.program();
+        byte[] data = meta.data();
+        if (prog != null && data != null) {
+            as.mapSegments(prog, data);
+        }
+        as.mapUserStack();
+
+        Process process = new Process(meta.name(), prog, new ArrayList<Thread>());
+        process.pid(nextPid);
+        nextPid += 1;
+        process.addressSpace(as);
+
+        if (prog != null) {
+            Thread main = Scheduler.createUserThread(process, prog.getEntry(), AddressSpace.USER_STACK_TOP);
+            process.threads().add(main);
+            Scheduler.add(main);
+        }
         processes.add(process);
         return process;
     }

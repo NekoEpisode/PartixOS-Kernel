@@ -32,9 +32,8 @@ kern_entry:
     csrw stvec, t0
 
     # sscratch points to a dedicated trap stack, NOT the main kernel stack.
-    # Deep interrupt handling (Partic dispatch -> EventBus -> StrBuilder/UART
-    # printing) uses several KB of stack; sharing the main stack would
-    # clobber the interrupted frame's locals (e.g. BspKrMain's allDevices).
+    # After the scheduler starts, sscratch is switched to the current
+    # thread's own kernel stack on every restore (see context.S).
     la  t0, _trap_stack_top
     csrw sscratch, t0
 
@@ -47,6 +46,10 @@ kern_entry:
     j   .
 
 # ── Trap entry ──────────────────────────────────
+# Saves a full 272-byte frame (30 GP regs + sepc + sstatus + saved_sp +
+# kernel_stack_top) on the thread's kernel stack, calls trap_dispatch
+# (returns the frame to restore from, possibly another thread's), then
+# resumes through the shared restore_context tail (context.S).
 .section .text
 .align 4
 trap_entry:
@@ -55,7 +58,7 @@ trap_entry:
     csrrw sp, sscratch, sp
 
     # Save all registers to trap frame (skip x0)
-    addi sp, sp, -256
+    addi sp, sp, -272
 
     sd  ra,   0(sp)
     sd  gp,   8(sp)
@@ -70,17 +73,17 @@ trap_entry:
     sd  a2,  80(sp)
     sd  a3,  88(sp)
     sd  a4,  96(sp)
-    sd  a5,  104(sp)
-    sd  a6,  112(sp)
-    sd  a7,  120(sp)
-    sd  s2,  128(sp)
-    sd  s3,  136(sp)
-    sd  s4,  144(sp)
-    sd  s5,  152(sp)
-    sd  s6,  160(sp)
-    sd  s7,  168(sp)
-    sd  s8,  176(sp)
-    sd  s9,  184(sp)
+    sd  a5, 104(sp)
+    sd  a6, 112(sp)
+    sd  a7, 120(sp)
+    sd  s2, 128(sp)
+    sd  s3, 136(sp)
+    sd  s4, 144(sp)
+    sd  s5, 152(sp)
+    sd  s6, 160(sp)
+    sd  s7, 168(sp)
+    sd  s8, 176(sp)
+    sd  s9, 184(sp)
     sd  s10, 192(sp)
     sd  s11, 200(sp)
     sd  t3,  208(sp)
@@ -92,54 +95,23 @@ trap_entry:
     sd   t0, 240(sp)
     csrr t0, sstatus
     sd   t0, 248(sp)
+    csrr t0, sscratch          # interrupted sp (from the swap above)
+    sd   t0, 256(sp)
+    addi t0, sp, 272           # kernel stack top (sp was top - 272)
+    sd   t0, 264(sp)
 
     # a0 = scause, a1 = sepc, a2 = trap frame
     csrr a0, scause
     csrr a1, sepc
     mv   a2, sp
+    # 置 mstatus.SUM（bit 18）：S-mode 访问用户页必需（syscall 读写用户内存）
+    li   t0, 0x40000
+    csrrs zero, sstatus, t0
     call trap_dispatch
 
-    # Restore
-    ld   t0, 248(sp)
-    csrw sstatus, t0
-    ld   t0, 240(sp)
-    csrw sepc, t0
-
-    ld   ra,   0(sp)
-    ld   gp,   8(sp)
-    ld   tp,  16(sp)
-    ld   t0,  24(sp)
-    ld   t1,  32(sp)
-    ld   t2,  40(sp)
-    ld   s0,  48(sp)
-    ld   s1,  56(sp)
-    ld   a0,  64(sp)
-    ld   a1,  72(sp)
-    ld   a2,  80(sp)
-    ld   a3,  88(sp)
-    ld   a4,  96(sp)
-    ld   a5,  104(sp)
-    ld   a6,  112(sp)
-    ld   a7,  120(sp)
-    ld   s2,  128(sp)
-    ld   s3,  136(sp)
-    ld   s4,  144(sp)
-    ld   s5,  152(sp)
-    ld   s6,  160(sp)
-    ld   s7,  168(sp)
-    ld   s8,  176(sp)
-    ld   s9,  184(sp)
-    ld   s10, 192(sp)
-    ld   s11, 200(sp)
-    ld   t3,  208(sp)
-    ld   t4,  216(sp)
-    ld   t5,  224(sp)
-    ld   t6,  232(sp)
-
-    addi sp, sp, 256
-    # Restore interrupted sp from sscratch, save trap sp back
-    csrrw sp, sscratch, sp
-    sret
+    # a0 = frame to restore (same frame if no context switch)
+    mv   sp, a0
+    j    restore_context
 
 boot_hartid:
     .space 8
@@ -150,7 +122,7 @@ _stack_bottom:
     .space 1048576
 _stack_top:
 
-# Dedicated trap/interrupt stack (16 KiB).
+# Dedicated trap/interrupt stack (16 KiB), used before the scheduler starts.
 .align 16
 _trap_stack_bottom:
     .space 16384

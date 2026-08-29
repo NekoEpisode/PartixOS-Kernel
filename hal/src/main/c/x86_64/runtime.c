@@ -15,6 +15,13 @@ extern char __kernel_image_end[];
 uint64_t kr_image_start = (uint64_t)__kernel_image_start;
 uint64_t kr_image_end   = (uint64_t)__kernel_image_end;
 
+// Boot stack region: entry_uefi.s sets RSP to 0x300000; the stack grows down
+// from there and must never be handed out as free memory. The region between
+// the kernel image end and the stack top is reserved. (RISC-V: 0 = no-op,
+// its boot stack lives inside the image .bss and is already carved.)
+uint64_t kr_stack_bottom = (uint64_t)__kernel_image_end;
+uint64_t kr_stack_top    = 0x300000;
+
 uint64_t kr_malloc(uint64_t size) { return kr_alloc(size); }
 void kr_free(uint64_t addr) { kr_dealloc(addr); }
 

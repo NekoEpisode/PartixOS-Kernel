@@ -1,0 +1,14 @@
+package kr.partix.kernel.sched;
+
+class SleepEntry {
+    final Thread thread;
+    final long wakeTick;
+
+    SleepEntry(Thread thread, long wakeTick) {
+        this.thread = thread;
+        this.wakeTick = wakeTick;
+    }
+
+    Thread thread() -> thread
+    long wakeTick() -> wakeTick
+}

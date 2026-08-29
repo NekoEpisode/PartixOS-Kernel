@@ -1,0 +1,11 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.sched.Scheduler;
+
+/** sleep(ms)：阻塞当前线程到指定毫秒数。 */
+class SysSleep implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        Scheduler.sysSleep(a0);
+        return 0;
+    }
+}

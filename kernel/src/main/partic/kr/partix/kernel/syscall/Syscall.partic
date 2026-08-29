@@ -1,0 +1,37 @@
+package kr.partix.kernel.syscall;
+
+/**
+ * 系统调用分发器：按号查注册表并调用对应 handler。
+ * 新增系统调用 = 实现 ISyscallHandler + 在 init() 里 register 一行。
+ * ABI：riscv a7=号/a0~a5=参数，x86 eax=号/rdi,rsi,rdx,r10,r8,r9。
+ */
+class Syscall {
+    static final int MAX_SYSCALLS = 64;
+
+    private static ISyscallHandler[] handlers;
+
+    static void init() {
+        handlers = new ISyscallHandler[MAX_SYSCALLS];
+
+        register(SyscallNum.EXIT, new SysExit());
+        register(SyscallNum.WRITE, new SysWrite());
+        register(SyscallNum.YIELD, new SysYield());
+        register(SyscallNum.SLEEP, new SysSleep());
+        register(SyscallNum.GETTID, new SysGetTid());
+    }
+
+    static void register(int num, ISyscallHandler handler) {
+        if (handlers == null) return;
+        if (num >= 0 && num < MAX_SYSCALLS) {
+            handlers[num] = handler;
+        }
+    }
+
+    static long dispatch(int num, long a0, long a1, long a2, long a3, long a4, long a5) {
+        if (handlers == null) return -1;
+        if (num < 0 || num >= MAX_SYSCALLS) return -1;
+        ISyscallHandler handler = handlers[num];
+        if (handler == null) return -1;
+        return handler.handle(a0, a1, a2, a3, a4, a5);
+    }
+}

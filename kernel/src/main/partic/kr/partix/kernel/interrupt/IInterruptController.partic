@@ -7,5 +7,10 @@ interface IInterruptController {
     void enable(int vector);
     void disable(int vector);
     void eoi(int vector);
-    void dispatch(long cause, long epc, long sp, long frame);
+
+    /**
+     * 分发一次中断/trap。返回要恢复的上下文帧：
+     * 0 = 不切换（恢复原帧），非 0 = 切换到该线程的帧。
+     */
+    long dispatch(long cause, long epc, long sp, long frame);
 }

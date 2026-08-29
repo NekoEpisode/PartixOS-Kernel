@@ -1,0 +1,9 @@
+package kr.partix.kernel.sched;
+
+class ThreadState {
+    static final int NEW = 0;
+    static final int READY = 1;
+    static final int RUNNING = 2;
+    static final int BLOCKED = 3;
+    static final int TERMINATED = 4;
+}

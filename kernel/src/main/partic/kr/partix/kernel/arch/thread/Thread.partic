@@ -1,5 +1,0 @@
-package kr.partix.kernel.arch.thread;
-
-class Thread {
-    
-}

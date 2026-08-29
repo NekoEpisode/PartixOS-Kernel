@@ -14,13 +14,13 @@ class RISCVPageTableManager implements IPageTableManager {
     private static final long PTE_W = 4;
     private static final long PTE_X = 8;
     private static final long PTE_U = 16;
-    private static final long PTE_G = 32;
     private static final long PTE_A = 64;
     private static final long PTE_D = 128;
 
     private static final long SATP_MODE_SV39 = 8L << 60;
 
     private long pgd;
+    private long activeRoot = -1;
 
     private static long allocZeroPage() {
         long addr = Memory.malloc(8192);
@@ -35,6 +35,7 @@ class RISCVPageTableManager implements IPageTableManager {
         pgd = allocZeroPage();
         buildIdentityMap();
         protectNullPage();
+        activeRoot = pgd;
     }
 
     private void buildIdentityMap() {
@@ -79,6 +80,88 @@ class RISCVPageTableManager implements IPageTableManager {
     void load() {
         long satp = SATP_MODE_SV39 | (pgd >> 12);
         paging_load_satp(satp);
+        activeRoot = pgd;
+    }
+
+    long getKernelRoot() -> pgd
+
+    long createAddressSpace() {
+        long root = allocZeroPage();
+        // 克隆内核 pgd 槽：为每个在用槽分配新 pmd 表并拷贝项（内核恒等映射）。
+        for (int i = 0; i < 512; i++) {
+            long pgdEntry = System.read64(pgd + (long)i * 8);
+            if (pgdEntry == 0) continue;
+            long srcPmd = (pgdEntry & ~0x3FFL) << 2;
+            long dstPmd = allocZeroPage();
+            for (int j = 0; j < 512; j++) {
+                System.write64(dstPmd + (long)j * 8, System.read64(srcPmd + (long)j * 8));
+            }
+            System.write64(root + (long)i * 8, (dstPmd >> 2) | (pgdEntry & 0x3FFL));
+        }
+        return root;
+    }
+
+    void map4k(long root, long virt, long phys, int flags) {
+        long entry = (phys >> 2) | PTE_V | PTE_R | PTE_A | PTE_D;
+        if ((flags & PageFlags.WRITABLE) != 0) entry |= PTE_W;
+        if ((flags & PageFlags.NO_EXEC) == 0) entry |= PTE_X;
+        if ((flags & PageFlags.USER) != 0) entry |= PTE_U;
+
+        int pgdIndex = (int)(virt / 0x40000000L);
+        int pmdIndex = (int)((virt % 0x40000000L) / 0x200000L);
+        int pteIndex = (int)((virt % 0x200000L) / 0x1000L);
+
+        long pgdEntry = System.read64(root + (long)pgdIndex * 8);
+        long pmd;
+        if ((pgdEntry & PTE_V) == 0) {
+            pmd = allocZeroPage();
+            System.write64(root + (long)pgdIndex * 8, (pmd >> 2) | PTE_V);
+        } else {
+            pmd = (pgdEntry & ~0x3FFL) << 2;
+        }
+
+        long pmdEntry = System.read64(pmd + (long)pmdIndex * 8);
+        long pteTable;
+        if ((pmdEntry & PTE_V) == 0) {
+            pteTable = allocZeroPage();
+            System.write64(pmd + (long)pmdIndex * 8, (pteTable >> 2) | PTE_V);
+        } else if ((pmdEntry & (PTE_R | PTE_X)) != 0) {
+            // 2MB 叶子大页 → 拆成 4KB PTE 表，保留原有映射
+            pteTable = allocZeroPage();
+            long physBase = (pmdEntry >> 10) << 12;
+            long baseFlags = pmdEntry & 0x3FFL;
+            for (int i = 0; i < 512; i++) {
+                System.write64(pteTable + (long)i * 8,
+                        ((physBase + (long)i * 4096) >> 2) | baseFlags);
+            }
+            System.write64(pmd + (long)pmdIndex * 8, (pteTable >> 2) | PTE_V);
+        } else {
+            pteTable = (pmdEntry & ~0x3FFL) << 2;
+        }
+
+        System.write64(pteTable + (long)pteIndex * 8, entry);
+    }
+
+    void unmap4k(long root, long virt) {
+        int pgdIndex = (int)(virt / 0x40000000L);
+        int pmdIndex = (int)((virt % 0x40000000L) / 0x200000L);
+        int pteIndex = (int)((virt % 0x200000L) / 0x1000L);
+
+        long pgdEntry = System.read64(root + (long)pgdIndex * 8);
+        if ((pgdEntry & PTE_V) == 0) return;
+        long pmd = (pgdEntry & ~0x3FFL) << 2;
+        long pmdEntry = System.read64(pmd + (long)pmdIndex * 8);
+        if ((pmdEntry & PTE_V) == 0) return;
+        if ((pmdEntry & (PTE_R | PTE_X)) != 0) return;  // 2MB 大页，不按 4KB 拆
+        long pteTable = (pmdEntry & ~0x3FFL) << 2;
+        System.write64(pteTable + (long)pteIndex * 8, 0);
+    }
+
+    void loadRoot(long root) {
+        if (root == activeRoot) return;
+        long satp = SATP_MODE_SV39 | (root >> 12);
+        paging_load_satp(satp);
+        activeRoot = root;
     }
 
     private long findMaxPhys() {

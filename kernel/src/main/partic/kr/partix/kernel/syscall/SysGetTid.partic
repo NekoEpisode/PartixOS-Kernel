@@ -1,0 +1,13 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
+
+/** gettid()：当前线程 tid。 */
+class SysGetTid implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        Thread t = Scheduler.current();
+        if (t == null) return 0;
+        return (long) t.tid();
+    }
+}

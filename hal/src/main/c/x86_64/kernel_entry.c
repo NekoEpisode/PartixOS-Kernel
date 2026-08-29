@@ -16,9 +16,10 @@ typedef struct {
     uint64_t cs_selector;
 } BootInfo;
 
-// Called from idt.c default_handler — bridges interrupt to Partic
-// Symbol: kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJV
-extern void kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJV(
+// Called from isr.s common handler — bridges interrupt to Partic.
+// Returns the frame to restore from (x86 ignores it until the scheduler lands).
+// Symbol: kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJJ
+extern long kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJJ(
     int64_t cause, uint64_t epc, uint64_t sp, uint64_t frame);
 
 void kernel_entry(BootInfo* info) {

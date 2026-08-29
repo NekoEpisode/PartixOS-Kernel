@@ -6,6 +6,7 @@ import kr.partix.kernel.interrupt.IInterruptHandler;
 import kr.partix.kernel.interrupt.IInterruptData;
 import kr.partix.kernel.interrupt.Interrupt;
 import kr.partix.kernel.exception.KernelNullPointerFault;
+import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.timer.Timer;
 
 class X86InterruptController implements IInterruptController {
@@ -89,7 +90,7 @@ class X86InterruptController implements IInterruptController {
         }
     }
 
-    void dispatch(long cause, long epc, long sp, long frame) {
+    long dispatch(long cause, long epc, long sp, long frame) {
         int vector = (int) cause;
 
         // NULL 页 Page Fault → TriggerNullPointerEvent（EventBus → 监听器）
@@ -97,16 +98,19 @@ class X86InterruptController implements IInterruptController {
             long cr2 = paging_read_cr2();
             if (cr2 < 4096) {
                 KernelNullPointerFault.trigger(cr2, epc, 0);
-                return;
+                return 0;
             }
         }
 
         if (vector == Timer.getVector()) {
-            // Timer interrupt — bump g_tick and notify via TimerEvent.
+            // Timer interrupt — bump g_tick, run the scheduler tick, then
+            // notify via TimerEvent. Returns the next frame to restore.
             Timer.tick();
-            Interrupt.fireTimerEvent(epc, sp);
+            long next = Scheduler.onTick();
+            // 诊断：临时去掉 EventBus 深调用，二分定位 NPE 来源
+            // Interrupt.fireTimerEvent(epc, sp);
             Timer.eoi();
-            return;
+            return next;
         }
 
         IInterruptHandler h = handlers[vector];
@@ -114,5 +118,6 @@ class X86InterruptController implements IInterruptController {
         if (h != null) h.handle(vector, data);
         Interrupt.fire(vector, epc, sp, data);
         eoi(vector);
+        return 0;
     }
 }

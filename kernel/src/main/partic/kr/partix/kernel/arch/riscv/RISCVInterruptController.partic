@@ -6,7 +6,13 @@ import kr.partix.kernel.interrupt.IInterruptController;
 import kr.partix.kernel.interrupt.IInterruptHandler;
 import kr.partix.kernel.interrupt.Interrupt;
 import kr.partix.kernel.exception.KernelNullPointerFault;
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
+import kr.partix.kernel.syscall.Syscall;
 import kr.partix.kernel.timer.Timer;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
 
 class RISCVInterruptController implements IInterruptController {
     private static long plicBase;
@@ -22,6 +28,15 @@ class RISCVInterruptController implements IInterruptController {
     private static final long CAUSE_SSI = 1;   // supervisor software interrupt
     private static final long CAUSE_STI = 5;   // supervisor timer interrupt
     private static final long CAUSE_SEI = 7;   // supervisor external interrupt
+    private static final long CAUSE_ECALL_U = 8; // ecall from U-mode
+
+    // trap 帧布局（context.S / entry.S）：a7 在 +120，a0~a5 在 +64~+104
+    private static final long FRAME_A0 = 64;
+    private static final long FRAME_A5 = 104;
+    private static final long FRAME_A7 = 120;
+    private static final long FRAME_SSTATUS = 248;
+
+    private static final long SSTATUS_SPP = 0x100;
 
     private final IInterruptHandler[] handlers = new IInterruptHandler[256];
 
@@ -79,7 +94,7 @@ class RISCVInterruptController implements IInterruptController {
         System.write32(plicBase + PLIC_CTX_CLAIM, vector);
     }
 
-    void dispatch(long cause, long epc, long sp, long frame) {
+    long dispatch(long cause, long epc, long sp, long frame) {
         boolean isInterrupt = (cause & SCAUSE_INTERRUPT) != 0;
         long code = cause & SCAUSE_CODE;
 
@@ -87,9 +102,10 @@ class RISCVInterruptController implements IInterruptController {
             if (code == CAUSE_STI) {
                 // Supervisor timer interrupt (ACLINT/CLINT via SBI TIME).
                 Timer.tick();
+                long next = Scheduler.onTick();
                 Interrupt.fireTimerEvent(epc, sp);
                 Timer.eoi();
-                return;
+                return next;
             }
             if (code == CAUSE_SEI) {
                 // Supervisor external interrupt: claim the PLIC source.
@@ -98,28 +114,104 @@ class RISCVInterruptController implements IInterruptController {
                 if (h != null) h.handle(irq, null);
                 Interrupt.fire(irq, epc, sp, null);
                 System.write32(plicBase + PLIC_CTX_CLAIM, irq);
-                return;
+                return 0;
             }
             if (code == CAUSE_SSI) {
                 // Supervisor software interrupt (IPI). No sender is wired up
                 // yet; clear the pending bit and ignore so it cannot storm.
                 Timer.clearSsi();
-                return;
+                return 0;
             }
             // Unknown interrupt cause — report it.
             Interrupt.fire((int) code, epc, sp, null);
-            return;
+            return 0;
         }
 
-        // NULL 页 Page/Access Fault → TriggerNullPointerEvent（EventBus → 监听器）
-        // 13/15 = load/store page fault；5/7 = load/store access fault
-        // （后两者在部分真机 OpenSBI PMP 配置下可能出现）
-        if (code == 13 || code == 15 || code == 5 || code == 7) {
+        if (code == CAUSE_ECALL_U) {
+            // 用户态系统调用：a7 = 号，a0~a5 = 参数
+            long num = System.read64(frame + FRAME_A7);
+            long a0 = System.read64(frame + FRAME_A0);
+            long a1 = System.read64(frame + FRAME_A0 + 8);
+            long a2 = System.read64(frame + FRAME_A0 + 16);
+            long a3 = System.read64(frame + FRAME_A0 + 24);
+            long a4 = System.read64(frame + FRAME_A0 + 32);
+            long a5 = System.read64(frame + FRAME_A5);
+            long ret = Syscall.dispatch((int) num, a0, a1, a2, a3, a4, a5);
+            System.write64(frame + FRAME_A0, ret);
+            // sepc 前进到下一条指令，避免 sret 后重执行 ecall
+            System.write64(frame + 240, epc + 4);
+            return Scheduler.onReschedule();
+        }
+
+        // 页/访问类异常（12=取指缺页, 13/15=load/store 缺页, 5/7=访问异常）
+        if (code == 12 || code == 13 || code == 15 || code == 5 || code == 7) {
             long stval = paging_read_stval();
+            long sstatus = System.read64(frame + FRAME_SSTATUS);
+            boolean user = (sstatus & SSTATUS_SPP) == 0;
+            // 诊断插桩（临时）：异常信息 + 当前线程内核栈顶 + stval 所在页的 PTE
+            Thread cur = Scheduler.current();
+            long curKstack = 0;
+            long uroot = 0;
+            if (cur != null) {
+                curKstack = cur.kernelStackTop();
+                if (cur.owner() != null) uroot = cur.owner().addressSpace().root();
+            }
+            StrBuilder fsb = new StrBuilder();
+            fsb.append("[fault] code=");
+            fsb.append(StrUtils.longToStr(code));
+            fsb.append(" stval=");
+            fsb.append(StrUtils.toHex(stval));
+            fsb.append(" spp=");
+            fsb.append(StrUtils.longToStr((long) (user ? 0 : 1)));
+            fsb.append(" kstackTop=");
+            fsb.append(StrUtils.toHex(curKstack));
+            fsb.append(" root=");
+            fsb.append(StrUtils.toHex(uroot));
+            fsb.append(" tid=");
+            if (cur != null) {
+                fsb.append(StrUtils.longToStr((long) cur.tid()));
+                fsb.append(" savedF=");
+                fsb.append(StrUtils.toHex(cur.savedFrame()));
+            } else {
+                fsb.append("none");
+            }
+            str fout = fsb.build();
+            BspKrMain.arch.getUart().println(fout);
+            fsb.dispose();
+            if (uroot != 0) {
+                long pgdE = System.read64(uroot + (stval / 0x40000000L) * 8);
+                long pmdE = 0;
+                long pte = 0;
+                if ((pgdE & 1) != 0) {
+                    long pmdAddr = (pgdE & ~0x3FFL) << 2;
+                    pmdE = System.read64(pmdAddr + ((stval % 0x40000000L) / 0x200000L) * 8);
+                    if ((pmdE & 1) != 0 && (pmdE & (2 | 8)) == 0) {
+                        long ptAddr = (pmdE & ~0x3FFL) << 2;
+                        pte = System.read64(ptAddr + ((stval % 0x200000L) / 0x1000L) * 8);
+                    }
+                }
+                StrBuilder pteSb = new StrBuilder();
+                pteSb.append("[pte] pgd=");
+                pteSb.append(StrUtils.toHex(pgdE));
+                pteSb.append(" pmd=");
+                pteSb.append(StrUtils.toHex(pmdE));
+                pteSb.append(" pte=");
+                pteSb.append(StrUtils.toHex(pte));
+                str pteOut = pteSb.build();
+                BspKrMain.arch.getUart().println(pteOut);
+                pteSb.dispose();
+            }
+            if (user) {
+                // 用户态故障：杀掉当前线程，不 panic
+                Scheduler.sysExit(-11);
+                return Scheduler.onReschedule();
+            }
             if (stval < 4096) {
                 KernelNullPointerFault.trigger(stval, epc, frame);
-                return;
+                return 0;
             }
+            // 内核态其他地址的缺页：说明内核自身映射缺失，停机
+            BootFail.fail("kernel page fault");
         }
 
         // Synchronous exception — report with the exception code as vector.
@@ -127,6 +219,7 @@ class RISCVInterruptController implements IInterruptController {
         IInterruptHandler h = handlers[vector];
         if (h != null) h.handle(vector, null);
         Interrupt.fire(vector, epc, sp, null);
+        return 0;
     }
 
     private static void writeEnable(long src, boolean on) {

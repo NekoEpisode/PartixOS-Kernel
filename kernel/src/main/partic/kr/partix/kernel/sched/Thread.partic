@@ -1,0 +1,93 @@
+package kr.partix.kernel.sched;
+
+import kr.partix.kernel.memory.PageAllocator;
+import kr.partix.kernel.process.Process;
+
+/**
+ * 线程控制块：调度单元。
+ * 每个线程持有独立内核栈（32KB，物理连续）；上下文帧保存在该栈顶部，
+ * savedFrame 槽（按 tid，见 HAL thread_frames）指向它。
+ */
+class Thread {
+    static final int KERNEL_STACK_PAGES = 8;
+
+    private final int tid;
+    private final Process owner;      // null = 内核线程
+    private int state;
+    private long kernelStackTop;
+    private long entry;               // 内核线程入口（asm stub 地址）
+    private long arg;
+    private long userEntry;           // 用户线程入口（0 = 内核线程）
+    private long userStackTop;        // 用户栈顶（0 = 内核线程）
+    private int ticksLeft;
+    private int exitCode;
+    private long sleepWakeTick;
+
+    private extern void build_thread_frame(long frame, long entry, long arg,
+                                           long savedSp, long kstackTop, long sstatus);
+
+    Thread(Process owner, long entry, long arg, long userEntry, long userStackTop) {
+        this.owner = owner;
+        this.entry = entry;
+        this.arg = arg;
+        this.userEntry = userEntry;
+        this.userStackTop = userStackTop;
+        this.tid = ThreadManager.allocateTid();
+        this.state = ThreadState.NEW;
+        this.ticksLeft = 0;
+        this.exitCode = -1;
+        this.sleepWakeTick = 0;
+
+        long kstack = PageAllocator.allocPages(KERNEL_STACK_PAGES);
+        this.kernelStackTop = kstack + (long) KERNEL_STACK_PAGES * 4096;
+
+        long savedSp;
+        long sstatus;
+        if (userEntry != 0) {
+            savedSp = userStackTop;
+            sstatus = 0x20;                  // SPP=0 用户态, SPIE=1
+        } else {
+            savedSp = kernelStackTop - 512;
+            sstatus = 0x40120;               // SPP=1 内核态, SPIE=1, SUM=1
+        }
+        long frameEntry;
+        if (entry != 0) frameEntry = entry;
+        else frameEntry = userEntry;
+        build_thread_frame(kernelStackTop - 272, frameEntry, arg, savedSp, kernelStackTop, sstatus);
+        // 记录帧指针：新线程首次被调度时从该帧恢复
+        Threads.setFrame(tid, kernelStackTop - 272);
+        ThreadManager.register(this);
+    }
+
+    static Thread createKernel(Process owner, KernelRunnable r) ->
+        new Thread(owner, Threads.entryStub(), (long) r, 0, 0)
+
+    static Thread createUser(Process owner, long userEntry, long userStackTop) ->
+        new Thread(owner, 0, 0, userEntry, userStackTop)
+
+    int tid() -> tid
+    Process owner() -> owner
+    int state() -> state
+    void state(int s) {
+        state = s;
+    }
+    long kernelStackTop() -> kernelStackTop
+    long savedFrame() -> Threads.getFrame(tid)
+    void savedFrame(long f) {
+        Threads.setFrame(tid, f);
+    }
+    int ticksLeft() -> ticksLeft
+    void ticksLeft(int t) {
+        ticksLeft = t;
+    }
+    int exitCode() -> exitCode
+    void exitCode(int c) {
+        exitCode = c;
+    }
+    long sleepWakeTick() -> sleepWakeTick
+    void sleepWakeTick(long t) {
+        sleepWakeTick = t;
+    }
+    long userEntry() -> userEntry
+    long userStackTop() -> userStackTop
+}

@@ -1,0 +1,8 @@
+package kr.partix.kernel.sched;
+
+/** 内核线程可运行体；子类覆写 run()，默认行为是直接退出线程。 */
+class KernelRunnable {
+    void run() {
+        Scheduler.exit(0);
+    }
+}

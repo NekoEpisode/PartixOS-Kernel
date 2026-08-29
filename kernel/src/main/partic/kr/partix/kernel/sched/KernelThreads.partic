@@ -1,0 +1,13 @@
+package kr.partix.kernel.sched;
+
+/**
+ * 内核线程入口桥：由 asm stub（kthread_entry_stub）以固定符号调用。
+ * 把 arg（KernelRunnable 对象指针）还原后执行，返回后结束线程。
+ */
+class KernelThreads {
+    static void run(long arg) {
+        KernelRunnable r = (KernelRunnable) arg;
+        r.run();
+        Scheduler.exit(0);
+    }
+}

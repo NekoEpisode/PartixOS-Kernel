@@ -4,4 +4,19 @@ interface IPageTableManager {
     void init();
     void map(long virt, long phys, long size, int flags);
     void load();
+
+    /** 内核根页表（当前活动的内核地址空间）。 */
+    long getKernelRoot();
+
+    /** 创建新地址空间：克隆内核映射，返回其根页表。 */
+    long createAddressSpace();
+
+    /** 在指定地址空间中建立 4KB 页映射。 */
+    void map4k(long root, long virt, long phys, int flags);
+
+    /** 移除指定地址空间中的一个 4KB 映射。 */
+    void unmap4k(long root, long virt);
+
+    /** 切换到指定地址空间（并刷新 TLB）。 */
+    void loadRoot(long root);
 }

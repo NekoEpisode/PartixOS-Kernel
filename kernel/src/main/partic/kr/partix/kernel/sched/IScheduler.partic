@@ -1,0 +1,8 @@
+package kr.partix.kernel.sched;
+
+/** 调度策略接口：只负责"下一个该跑谁"，机制（切换/状态）由 Scheduler 负责。 */
+interface IScheduler {
+    void add(Thread t);
+    void remove(Thread t);
+    Thread next();
+}

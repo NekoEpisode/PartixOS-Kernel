@@ -1,0 +1,110 @@
+package kr.partix.kernel.paging;
+
+import kr.partix.kernel.memory.PageAllocator;
+import kr.partix.kernel.program.IProgram;
+import kr.partix.kernel.program.ProgramSegment;
+import kr.partix.kernel.sys.System;
+
+/**
+ * 进程地址空间：独立的根页表 + 用户程序段/栈映射。
+ * 内核恒等映射在 createAddressSpace 时克隆，用户页按 4KB 映射。
+ *
+ * 段映射按 4KB 页合并：同一页被多个段占用时，权限取并集（如
+ * .text 与 .rodata 同页时该页保持可执行），物理页复用，各段字节
+ * 只写入自己覆盖的地址范围。
+ */
+class AddressSpace {
+    /** 用户栈顶（两架构统一虚拟地址）。 */
+    static final long USER_STACK_TOP = 0x7FFFE000L;
+
+    private static final int MAX_PAGES = 128;
+
+    private final IPageTableManager ptm;
+    private final long root;
+    private final long[] pageVaddrs = new long[MAX_PAGES];
+    private final long[] pagePhys = new long[MAX_PAGES];
+    private final int[] pageFlags = new int[MAX_PAGES];
+    private int pageCount = 0;
+
+    AddressSpace(IPageTableManager ptm) {
+        this.ptm = ptm;
+        this.root = ptm.createAddressSpace();
+    }
+
+    long root() -> root
+
+    void load() {
+        ptm.loadRoot(root);
+    }
+
+    /** 把程序各段拷贝进物理页（按页合并权限）并映射到用户地址空间。 */
+    void mapSegments(IProgram prog, byte[] data) {
+        pageCount = 0;
+        ProgramSegment[] segs = prog.getSegments();
+        for (int i = 0; i < segs.length; i++) {
+            ProgramSegment seg = segs[i];
+            if (seg == null) continue;
+            long start = seg.vaddr & ~4095L;
+            long end = (seg.vaddr + seg.memsz + 4095L) & ~4095L;
+            int flags = segmentFlags(seg);
+            for (long a = start; a < end; a += 4096L) {
+                if (pageCount >= MAX_PAGES) return;
+                int idx = findPage(a);
+                if (idx < 0) {
+                    idx = pageCount;
+                    pageCount += 1;
+                    pageVaddrs[idx] = a;
+                    pagePhys[idx] = PageAllocator.allocPage();
+                    if (pagePhys[idx] == 0) return;
+                    pageFlags[idx] = 0;
+                }
+                pageFlags[idx] |= flags;
+                copySegmentPage(data, seg, a, pagePhys[idx]);
+            }
+        }
+        for (int i = 0; i < pageCount; i++) {
+            ptm.map4k(root, pageVaddrs[i], pagePhys[i], pageFlags[i]);
+        }
+    }
+
+    /** 映射用户栈（2 页，RW，不可执行）。 */
+    void mapUserStack() {
+        long base = USER_STACK_TOP - 8192;
+        for (long a = base; a < USER_STACK_TOP; a += 4096L) {
+            long phys = PageAllocator.allocPage();
+            if (phys == 0) return;
+            ptm.map4k(root, a, phys, PageFlags.USER | PageFlags.WRITABLE | PageFlags.NO_EXEC);
+        }
+    }
+
+    private int findPage(long vaddr) {
+        for (int i = 0; i < pageCount; i++) {
+            if (pageVaddrs[i] == vaddr) return i;
+        }
+        return -1;
+    }
+
+    /** 把段中落在 [pageStart, pageStart+4096) 的字节拷入物理页；段外字节不碰。 */
+    private static void copySegmentPage(byte[] data, ProgramSegment seg, long pageStart, long phys) {
+        long segStart = seg.vaddr;
+        long segEnd = seg.vaddr + seg.memsz;
+        long pageEnd = pageStart + 4096;
+        for (long addr = pageStart; addr < pageEnd; addr++) {
+            if (addr >= segStart && addr < segEnd) {
+                long fileOff = addr - segStart;
+                if (fileOff < seg.filesz) {
+                    System.write8(phys + (addr - pageStart), data[(int) (seg.offset + fileOff)]);
+                } else {
+                    System.write8(phys + (addr - pageStart), (byte) 0);
+                }
+            }
+        }
+    }
+
+    private static int segmentFlags(ProgramSegment seg) {
+        int f = PageFlags.USER;
+        if (seg.isWritable()) f |= PageFlags.WRITABLE;
+        if (!seg.isExecutable()) f |= PageFlags.NO_EXEC;
+        return f;
+    }
+}

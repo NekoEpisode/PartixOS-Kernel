@@ -1,0 +1,9 @@
+package kr.partix.kernel.syscall;
+
+class SyscallNum {
+    static final int EXIT = 0;
+    static final int WRITE = 1;
+    static final int YIELD = 2;
+    static final int SLEEP = 3;
+    static final int GETTID = 4;
+}

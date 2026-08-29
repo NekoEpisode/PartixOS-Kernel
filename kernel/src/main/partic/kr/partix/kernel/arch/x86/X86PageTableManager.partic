@@ -15,6 +15,7 @@ class X86PageTableManager implements IPageTableManager {
     private static final long PDE_NX         = 0x8000000000000000L;
 
     private long pml4;
+    private long activeRoot = -1;
 
     private static long allocZeroPage() {
         long addr = Memory.malloc(8192);
@@ -79,6 +80,112 @@ class X86PageTableManager implements IPageTableManager {
 
     void load() {
         paging_load_cr3(pml4);
+        activeRoot = pml4;
+    }
+
+    long getKernelRoot() -> pml4
+
+    long createAddressSpace() {
+        long root = allocZeroPage();
+        // 克隆内核 PML4 槽：深拷贝 PDPT + PD（1GB 大页原样共享）。
+        for (int i = 0; i < 512; i++) {
+            long pml4e = System.read64(pml4 + (long)i * 8);
+            if ((pml4e & PML4E_PRESENT) == 0) continue;
+            long srcPdpt = pml4e & 0xFFFFFFFFFFFFF000L;
+            long dstPdpt = allocZeroPage();
+            for (int j = 0; j < 512; j++) {
+                long pdpte = System.read64(srcPdpt + (long)j * 8);
+                if ((pdpte & PML4E_PRESENT) == 0) continue;
+                if ((pdpte & PDE_PS_2MB) != 0) {
+                    System.write64(dstPdpt + (long)j * 8, pdpte);
+                    continue;
+                }
+                long srcPd = pdpte & 0xFFFFFFFFFFFFF000L;
+                long dstPd = allocZeroPage();
+                for (int k = 0; k < 512; k++) {
+                    System.write64(dstPd + (long)k * 8, System.read64(srcPd + (long)k * 8));
+                }
+                System.write64(dstPdpt + (long)j * 8, dstPd | (pdpte & 0xFFFL));
+            }
+            System.write64(root + (long)i * 8, dstPdpt | (pml4e & 0xFFFL));
+        }
+        return root;
+    }
+
+    void map4k(long root, long virt, long phys, int flags) {
+        long entry = phys | PML4E_PRESENT;
+        if ((flags & PageFlags.WRITABLE) != 0) entry |= PML4E_RW;
+        if ((flags & PageFlags.USER) != 0) entry |= 4;      // US 位
+        if ((flags & PageFlags.NO_EXEC) != 0) entry |= PDE_NX;
+
+        int pml4Index = (int)(virt / 0x8000000000L);
+        int pdptIndex = (int)((virt % 0x8000000000L) / 0x40000000L);
+        int pdIndex = (int)((virt % 0x40000000L) / 0x200000L);
+        int ptIndex = (int)((virt % 0x200000L) / 0x1000L);
+
+        long pml4e = System.read64(root + (long)pml4Index * 8);
+        long pdpt;
+        if ((pml4e & PML4E_PRESENT) == 0) {
+            pdpt = allocZeroPage();
+            System.write64(root + (long)pml4Index * 8, pdpt | PML4E_PRESENT | PML4E_RW);
+        } else {
+            pdpt = pml4e & 0xFFFFFFFFFFFFF000L;
+        }
+
+        long pdpte = System.read64(pdpt + (long)pdptIndex * 8);
+        long pd;
+        if ((pdpte & PML4E_PRESENT) == 0) {
+            pd = allocZeroPage();
+            System.write64(pdpt + (long)pdptIndex * 8, pd | PML4E_PRESENT | PML4E_RW);
+        } else {
+            pd = pdpte & 0xFFFFFFFFFFFFF000L;
+        }
+
+        long pde = System.read64(pd + (long)pdIndex * 8);
+        long pt;
+        if ((pde & PML4E_PRESENT) != 0 && (pde & PDE_PS_2MB) != 0) {
+            // 2MB 叶子 → 拆成 4KB PTE 表，保留原有映射
+            pt = allocZeroPage();
+            long physBase = pde & 0x000FFFFFFFFFF000L;
+            long baseFlags = pde & 0xFFFL;
+            for (int i = 0; i < 512; i++) {
+                System.write64(pt + (long)i * 8,
+                        (physBase + (long)i * 4096) | (baseFlags & ~PDE_PS_2MB));
+            }
+            System.write64(pd + (long)pdIndex * 8, pt | PML4E_PRESENT | PML4E_RW);
+        } else if ((pde & PML4E_PRESENT) != 0) {
+            pt = pde & 0xFFFFFFFFFFFFF000L;
+        } else {
+            pt = allocZeroPage();
+            System.write64(pd + (long)pdIndex * 8, pt | PML4E_PRESENT | PML4E_RW);
+        }
+
+        System.write64(pt + (long)ptIndex * 8, entry);
+    }
+
+    void unmap4k(long root, long virt) {
+        int pml4Index = (int)(virt / 0x8000000000L);
+        int pdptIndex = (int)((virt % 0x8000000000L) / 0x40000000L);
+        int pdIndex = (int)((virt % 0x40000000L) / 0x200000L);
+        int ptIndex = (int)((virt % 0x200000L) / 0x1000L);
+
+        long pml4e = System.read64(root + (long)pml4Index * 8);
+        if ((pml4e & PML4E_PRESENT) == 0) return;
+        long pdpt = pml4e & 0xFFFFFFFFFFFFF000L;
+        long pdpte = System.read64(pdpt + (long)pdptIndex * 8);
+        if ((pdpte & PML4E_PRESENT) == 0) return;
+        long pd = pdpte & 0xFFFFFFFFFFFFF000L;
+        long pde = System.read64(pd + (long)pdIndex * 8);
+        if ((pde & PML4E_PRESENT) == 0) return;
+        if ((pde & PDE_PS_2MB) != 0) return;   // 2MB 大页，不按 4KB 拆
+        long pt = pde & 0xFFFFFFFFFFFFF000L;
+        System.write64(pt + (long)ptIndex * 8, 0);
+    }
+
+    void loadRoot(long root) {
+        if (root == activeRoot) return;
+        paging_load_cr3(root);
+        activeRoot = root;
     }
 
     private long findMaxPhys() {
