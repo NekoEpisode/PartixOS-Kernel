@@ -16,6 +16,7 @@ import kr.partix.kernel.io.screen.utils.ScreenUtils;
 import kr.partix.kernel.io.screen.utils.RGB;
 import kr.partix.kernel.utils.Point;
 import kr.partix.kernel.log.StartupLogger;
+import kr.partix.kernel.debug.StackTrace;
 
 class BspKrMain {
     static IArch arch;
@@ -80,6 +81,8 @@ class BspKrMain {
             arch.getUart().println(builded);
             Memory.free(builded);
             sb.dispose();
+
+            StackTrace.printCurrent();
 
             int i = 1;
             Throwable whatNow = e;

@@ -96,7 +96,7 @@ class X86InterruptController implements IInterruptController {
         if (vector == PF_VECTOR) {
             long cr2 = paging_read_cr2();
             if (cr2 < 4096) {
-                KernelNullPointerFault.trigger(cr2, epc);
+                KernelNullPointerFault.trigger(cr2, epc, 0);
                 return;
             }
         }

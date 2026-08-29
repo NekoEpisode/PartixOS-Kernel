@@ -117,7 +117,7 @@ class RISCVInterruptController implements IInterruptController {
         if (code == 13 || code == 15 || code == 5 || code == 7) {
             long stval = paging_read_stval();
             if (stval < 4096) {
-                KernelNullPointerFault.trigger(stval, epc);
+                KernelNullPointerFault.trigger(stval, epc, frame);
                 return;
             }
         }

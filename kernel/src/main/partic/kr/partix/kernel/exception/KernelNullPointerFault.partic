@@ -3,6 +3,7 @@ package kr.partix.kernel.exception;
 import kr.partix.kernel.main.BspKrMain;
 import kr.partix.kernel.event.EventBus;
 import kr.partix.kernel.event.events.TriggerNullPointerEvent;
+import kr.partix.kernel.debug.StackTrace;
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.core.memory.Memory;
@@ -17,8 +18,9 @@ class KernelNullPointerFault {
     /**
      * @param address 被访问的地址（CR2 / stval，恒 < 4096）
      * @param epc     fault 指令地址（x86: RIP / riscv: sepc）
+     * @param frame   trap frame（arch 相关；x86 暂传 0，riscv 传 entry.S 的 frame）
      */
-    static void trigger(long address, long epc) {
+    static void trigger(long address, long epc, long frame) {
         StrBuilder sb = new StrBuilder();
         sb.append("[NPE] null deref: addr=");
         str a = StrUtils.toHex(address);
@@ -32,6 +34,8 @@ class KernelNullPointerFault {
         BspKrMain.arch.getUart().println(out);
         Memory.free(out);
         sb.dispose();
+
+        StackTrace.printTrap(epc, frame);
 
         TriggerNullPointerEvent event = new TriggerNullPointerEvent(address, epc);
         EventBus.call(event);

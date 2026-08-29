@@ -1,0 +1,46 @@
+package kr.partix.kernel.debug;
+
+import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * 调用栈打印（裸 PC 偏移版）。
+ * 有调试符号表的格式化输出是后续工作；当前统一输出 "  at 0x..."。
+ */
+class StackTrace {
+    private static final int MAX_FRAMES = 32;
+
+    private extern int kr_backtrace_current(long pcs, int max);
+    private extern int kr_backtrace_from_trap(long pcs, int max, long epc, long frame);
+
+    static void printCurrent() {
+        long[] pcs = new long[MAX_FRAMES];
+        int n = kr_backtrace_current((long) pcs + 16, MAX_FRAMES);
+        print(pcs, n);
+        Memory.free((long) pcs);
+    }
+
+    static void printTrap(long epc, long frame) {
+        long[] pcs = new long[MAX_FRAMES];
+        int n = kr_backtrace_from_trap((long) pcs + 16, MAX_FRAMES, epc, frame);
+        if (n <= 0) n = kr_backtrace_current((long) pcs + 16, MAX_FRAMES);
+        print(pcs, n);
+        Memory.free((long) pcs);
+    }
+
+    private static void print(long[] pcs, int count) {
+        for (int i = 0; i < count; i++) {
+            StrBuilder sb = new StrBuilder();
+            sb.append("  at ");
+            str h = StrUtils.toHex(pcs[i]);
+            sb.append(h);
+            Memory.free(h);
+            str msg = sb.build();
+            BspKrMain.arch.getUart().println(msg);
+            Memory.free(msg);
+            sb.dispose();
+        }
+    }
+}
