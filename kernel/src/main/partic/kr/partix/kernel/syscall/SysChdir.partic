@@ -1,0 +1,30 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.fs.vfs.VFS;
+import kr.partix.kernel.process.Process;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
+import lang.partic.stdlib.core.memory.Memory;
+
+/** chdir(path)：切换当前进程 cwd；成功返回 0，失败 <0。 */
+class SysChdir implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        Thread t = Scheduler.current();
+        if (t == null || t.owner() == null) return -1;
+        Process owner = t.owner();
+
+        str userPath = Syscall.copyUserString(a0);
+        if (userPath == null) return -1;
+        str resolved = owner.resolvePath(userPath);
+        Memory.free((long) userPath);
+        if (resolved == null) return -1;
+
+        if (!VFS.isDir(resolved)) {
+            Memory.free((long) resolved);
+            return -1;
+        }
+        owner.setCwd(resolved);
+        Memory.free((long) resolved);
+        return 0;
+    }
+}

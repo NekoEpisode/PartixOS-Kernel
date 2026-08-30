@@ -1,5 +1,8 @@
 package kr.partix.kernel.syscall;
 
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.core.memory.Memory;
+
 /**
  * 系统调用分发器：按号查注册表并调用对应 handler。
  * 新增系统调用 = 实现 ISyscallHandler + 在 init() 里 register 一行。
@@ -20,6 +23,14 @@ class Syscall {
         register(SyscallNum.GETTID, new SysGetTid());
         register(SyscallNum.OPEN, new SysOpen());
         register(SyscallNum.READ, new SysRead());
+        register(SyscallNum.CLOSE, new SysClose());
+        register(SyscallNum.SPAWN, new SysSpawn());
+        register(SyscallNum.WAIT, new SysWait());
+        register(SyscallNum.GETCWD, new SysGetcwd());
+        register(SyscallNum.CHDIR, new SysChdir());
+        register(SyscallNum.SCREEN_COUNT, new SysScreenCount());
+        register(SyscallNum.FBINFO, new SysFbinfo());
+        register(SyscallNum.FLIP, new SysFlip());
     }
 
     static void register(int num, ISyscallHandler handler) {
@@ -35,5 +46,23 @@ class Syscall {
         ISyscallHandler handler = handlers[num];
         if (handler == null) return -1;
         return handler.handle(a0, a1, a2, a3, a4, a5);
+    }
+
+    /** 从用户态拷贝 NUL 结尾字符串为 Partic str（最多 256 字节）；返回 malloc 的 str，调用方负责 free。 */
+    static str copyUserString(long p) {
+        if (p == 0) return null;
+        int len = 0;
+        while (len < 256) {
+            byte b = (byte) System.read8(p + len);
+            if (b == 0) break;
+            len += 1;
+        }
+        if (len == 0) return null;
+        str s = (str) Memory.malloc(len + 1);
+        for (int i = 0; i < len; i += 1) {
+            s[i] = (byte) System.read8(p + i);
+        }
+        s[len] = (byte) 0;
+        return s;
     }
 }

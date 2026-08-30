@@ -3,10 +3,16 @@ package kr.partix.kernel.process;
 import kr.partix.kernel.main.BspKrMain;
 import kr.partix.kernel.paging.AddressSpace;
 import kr.partix.kernel.program.IProgram;
+import kr.partix.kernel.program.ProgramLoaderRegistry;
 import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.sched.Thread;
+import kr.partix.kernel.fs.vfs.FileMode;
+import kr.partix.kernel.fs.vfs.INode;
+import kr.partix.kernel.fs.vfs.Path;
+import kr.partix.kernel.fs.vfs.VFS;
 import lang.partic.stdlib.additional.collection.list.ArrayList;
 import lang.partic.stdlib.additional.collection.list.List;
+import lang.partic.stdlib.core.memory.Memory;
 
 class ProcessManager {
     private static final List<Process> processes = new ArrayList<Process>(); // pid
@@ -38,5 +44,64 @@ class ProcessManager {
         }
         processes.add(process);
         return process;
+    }
+
+    /** 按 pid 查进程；不存在返回 null。 */
+    static Process getProcess(long pid) {
+        for (int i = 0; i < processes.size(); i += 1) {
+            Process p = processes.get(i);
+            if (p != null && p.pid() == pid) return p;
+        }
+        return null;
+    }
+
+    /**
+     * spawn：从磁盘路径读 ELF → 解析 → 创建进程（继承父进程 cwd）。
+     * 返回新进程 pid；失败返回 <0。
+     */
+    static long spawnFromPath(str path) {
+        INode inode = VFS.stat(path);
+        if (inode == null || !inode.isFile()) return (long) FileMode.ERR_NOT_FOUND;
+        long size = inode.size;
+        if (size <= 0 || size > 0x80000) return (long) FileMode.ERR_IO; // 上限 512KB
+        int fd = VFS.open(path, FileMode.READ);
+        if (fd <= 0) return (long) fd;
+        byte[] data = new byte[(int) size];
+        // 注意：DiskFileOps.read 的 buf 从 [0] 开始写，且 Fat32.read 内部循环
+        // 会一次读满整个文件，因此单次 read 即可，不能分多次（会互相覆盖）。
+        int r = VFS.read(fd, data, (int) size);
+        VFS.close(fd);
+        if (r != (int) size) {
+            Memory.free((long) data);
+            return (long) FileMode.ERR_IO;
+        }
+
+        IProgram prog = ProgramLoaderRegistry.load(data);
+        if (prog == null) {
+            Memory.free((long) data);
+            return (long) FileMode.ERR_IO;
+        }
+        ProcessMetaBuilder mb = new ProcessMetaBuilder();
+        str name = Path.getFileName(path);
+        mb.name(name);
+        // 注意：name 不 free —— ProcessMeta/Process 共享同一指针，现有
+        // 进程生命周期没有资源回收，释放会造成悬垂（进程退出清理是后续工作）。
+        mb.program(prog);
+        mb.data(data);
+        ProcessMeta meta = mb.build();
+        Process p = createProcess(meta);
+        Memory.free((long) meta);
+        Memory.free((long) mb);
+        if (p == null) {
+            Memory.free((long) data);
+            return (long) FileMode.ERR_IO;
+        }
+        // 继承父进程关系与 cwd
+        Thread cur = Scheduler.current();
+        if (cur != null && cur.owner() != null) {
+            p.parentPid(cur.owner().pid());
+            p.copyCwdFrom(cur.owner());
+        }
+        return p.pid();
     }
 }

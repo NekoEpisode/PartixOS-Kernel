@@ -1,0 +1,10 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.fs.vfs.VFS;
+
+/** close(fd)：关闭文件描述符。 */
+class SysClose implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        return (long) VFS.close((int) a0);
+    }
+}

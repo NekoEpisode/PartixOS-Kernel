@@ -1,0 +1,25 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.process.Process;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
+import kr.partix.kernel.sys.System;
+
+/** getcwd(buf, len)：把当前进程 cwd 拷到用户缓冲区，返回长度。 */
+class SysGetcwd implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        if (a0 == 0 || a1 <= 0) return -1;
+        Thread t = Scheduler.current();
+        if (t == null || t.owner() == null) return -1;
+        Process owner = t.owner();
+        byte[] cwd = owner.cwd();
+        int max = (int) a1;
+        int i = 0;
+        while (i < max - 1 && i < cwd.length && cwd[i] != (byte) 0) {
+            System.write8(a0 + i, cwd[i]);
+            i += 1;
+        }
+        System.write8(a0 + i, (byte) 0);
+        return (long) i;
+    }
+}

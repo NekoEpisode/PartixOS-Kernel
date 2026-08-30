@@ -17,13 +17,20 @@ class AddressSpace {
     /** 用户栈顶（两架构统一虚拟地址）。 */
     static final long USER_STACK_TOP = 0x7FFFE000L;
 
-    private static final int MAX_PAGES = 128;
+    /** 用户态 framebuffer 映射基址（避开程序基址 0x400000 与用户栈 0x7FFFC000）。 */
+    static final long USER_FB_BASE = 0x10000000L;
+    /** 每屏预留 16MB 跨度，足以容纳 3MB framebuffer。 */
+    static final long FB_REGION_SIZE = 0x1000000L;
+    static final int MAX_SCREENS = 8;
+
+    private static final int MAX_PAGES = 1024;
 
     private final IPageTableManager ptm;
     private final long root;
     private final long[] pageVaddrs = new long[MAX_PAGES];
     private final long[] pagePhys = new long[MAX_PAGES];
     private final int[] pageFlags = new int[MAX_PAGES];
+    private final boolean[] fbMapped = new boolean[MAX_SCREENS];
     private int pageCount = 0;
 
     AddressSpace(IPageTableManager ptm) {
@@ -75,6 +82,32 @@ class AddressSpace {
             if (phys == 0) return;
             ptm.map4k(root, a, phys, PageFlags.USER | PageFlags.WRITABLE | PageFlags.NO_EXEC);
         }
+    }
+
+    /** 是否已映射第 screenId 块屏的 framebuffer。 */
+    boolean isFbMapped(int screenId) {
+        if (screenId < 0 || screenId >= MAX_SCREENS) return false;
+        return fbMapped[screenId];
+    }
+
+    /**
+     * 把第 screenId 块屏的 framebuffer 物理页映射进用户空间，返回用户基址
+     * framebuffer 不占 pageVaddrs 记账（程序段限制），直接 map4k
+     * 依赖内核恒等映射（fbPhys 即物理地址）
+     */
+    long mapScreen(int screenId, long fbPhys, long fbSize) {
+        if (screenId < 0 || screenId >= MAX_SCREENS) return -1;
+        if (fbPhys == 0 || fbSize <= 0) return -1;
+        if (fbMapped[screenId]) return USER_FB_BASE + (long) screenId * FB_REGION_SIZE;
+
+        long base = USER_FB_BASE + (long) screenId * FB_REGION_SIZE;
+        long pages = (fbSize + 4095L) / 4096L;
+        for (long i = 0; i < pages; i += 1L) {
+            ptm.map4k(root, base + i * 4096L, fbPhys + i * 4096L,
+                      PageFlags.USER | PageFlags.WRITABLE | PageFlags.NO_EXEC);
+        }
+        fbMapped[screenId] = true;
+        return base;
     }
 
     private int findPage(long vaddr) {

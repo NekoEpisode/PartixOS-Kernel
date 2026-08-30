@@ -4,6 +4,8 @@ import kr.partix.kernel.paging.AddressSpace;
 import kr.partix.kernel.program.IProgram;
 import lang.partic.stdlib.additional.collection.list.List;
 import kr.partix.kernel.sched.Thread;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.core.memory.Memory;
 
 class Process {
     private final str name;
@@ -12,11 +14,15 @@ class Process {
     private AddressSpace addressSpace;
     private long pid = -1;
     private int exitCode = -1;
+    private long parentPid = 0;
+    private byte[] cwd = new byte[256];
 
     Process(str name, IProgram program, List<Thread> threads) {
         this.name = name;
         this.program = program;
         this.threads = threads;
+        cwd[0] = (byte) '/';
+        cwd[1] = (byte) 0;
     }
 
     void pid(long pid) {
@@ -33,5 +39,55 @@ class Process {
     int exitCode() -> exitCode
     void exitCode(int c) {
         exitCode = c;
+    }
+    long parentPid() -> parentPid
+    void parentPid(long p) {
+        parentPid = p;
+    }
+    byte[] cwd() -> cwd
+
+    /** 把 str 路径写入进程 cwd 缓冲（最多 255 字节）。 */
+    void setCwd(str path) {
+        int i = 0;
+        while (i < 255 && path[i] != (byte) 0) {
+            cwd[i] = path[i];
+            i += 1;
+        }
+        cwd[i] = (byte) 0;
+    }
+
+    /** 从父进程拷贝 cwd（spawn 时继承）。 */
+    void copyCwdFrom(Process parent) {
+        if (parent == null) return;
+        byte[] src = parent.cwd;
+        int i = 0;
+        while (i < 255 && src[i] != (byte) 0) {
+            cwd[i] = src[i];
+            i += 1;
+        }
+        cwd[i] = (byte) 0;
+    }
+
+    /** 相对路径基于 cwd 解析为绝对路径；返回 malloc 的 str，调用方负责 free。 */
+    str resolvePath(str path) {
+        if (path == null) return null;
+        if (path[0] == (byte) '/') {
+            int len = 0;
+            while (len < 255 && path[len] != (byte) 0) len += 1;
+            str abs = (str) Memory.malloc(len + 1);
+            for (int i = 0; i <= len; i += 1) abs[i] = path[i];
+            return abs;
+        }
+        StrBuilder sb = new StrBuilder();
+        int cl = 0;
+        while (cl < 255 && cwd[cl] != (byte) 0) {
+            sb.appendChar((char) (cwd[cl] & 0xFF));
+            cl += 1;
+        }
+        if (cl == 0 || cwd[cl - 1] != (byte) '/') sb.appendChar('/');
+        sb.append(path);
+        str result = sb.build();
+        sb.dispose();
+        return result;
     }
 }

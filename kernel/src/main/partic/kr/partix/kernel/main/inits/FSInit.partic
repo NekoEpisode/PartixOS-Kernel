@@ -23,16 +23,18 @@ class FSInit {
             return;
         }
 
-        IDisk raw = DiskRegistry.get(0);
-        // GPT 分区：挂载第一个分区；无分区表则回退整盘（旧 superfloppy 镜像）
-        IDisk disk = PartitionDisk.findFirst(raw);
-        if (disk == null) disk = raw;
-        Fat32 fat = new Fat32(disk);
+        // 第一块盘挂载到 /（系统盘：KERNEL.ELF 等）
+        IDisk rootDisk = resolveDisk(0);
+        if (rootDisk == null) {
+            StartupLogger.error("no usable disk 0, filesystem skipped");
+            return;
+        }
+        Fat32 fat = new Fat32(rootDisk);
         if (!fat.isValid()) {
             StartupLogger.error("no FAT32 filesystem on disk 0");
             return;
         }
-        VFS.mount("/", disk, fat);
+        VFS.mount("/", rootDisk, fat);
         StartupLogger.info("filesystem: FAT32 mounted at /");
 
         DEntry[] entries = VFS.ls("/");
@@ -47,6 +49,37 @@ class FSInit {
             StartupLogger.info(msg);
             Memory.free(msg);
             sb.dispose();
+        }
+
+        // 第二块盘挂载到 /bin（用户程序盘：init/psh 等，AHCI 多端口枚举）
+        if (DiskRegistry.getCount() >= 2) {
+            IDisk userDisk = resolveDisk(1);
+            if (userDisk == null) {
+                StartupLogger.warn("disk 1 not usable, /bin skipped");
+            } else {
+                Fat32 userFat = new Fat32(userDisk);
+                if (!userFat.isValid()) {
+                    StartupLogger.error("no FAT32 filesystem on disk 1, /bin skipped");
+                } else if (VFS.mount("/bin", userDisk, userFat) != 0) {
+                    StartupLogger.error("mount /bin failed");
+                } else {
+                    StartupLogger.info("filesystem: FAT32 mounted at /bin (user programs)");
+                    DEntry[] binEntries = VFS.ls("/bin");
+                    for (int i = 0; i < binEntries.length; i++) {
+                        DEntry e = binEntries[i];
+                        if (e == null) continue;
+                        StrBuilder sb = new StrBuilder();
+                        sb.append("  /bin/");
+                        sb.append(e.name);
+                        str msg = sb.build();
+                        StartupLogger.info(msg);
+                        Memory.free(msg);
+                        sb.dispose();
+                    }
+                }
+            }
+        } else {
+            StartupLogger.warn("single disk only, /bin skipped (user programs need disk 1)");
         }
 
         int fd = VFS.open("/KERNEL.ELF", FileMode.READ);
@@ -75,6 +108,16 @@ class FSInit {
         } else {
             StartupLogger.error("open /KERNEL.ELF failed");
         }
+    }
+
+    /** 取第 index 块盘的可挂载视图：GPT 第一个分区；无分区表回退整盘（旧 superfloppy 镜像）。 */
+    private static IDisk resolveDisk(int index) {
+        if (index < 0 || index >= DiskRegistry.getCount()) return null;
+        IDisk raw = DiskRegistry.get(index);
+        if (raw == null) return null;
+        IDisk part = PartitionDisk.findFirst(raw);
+        if (part == null) part = raw;
+        return part;
     }
 
     /** 读整个 KERNEL.ELF 用 ELFLoader 解析，验证解析器（临时验证代码）。 */

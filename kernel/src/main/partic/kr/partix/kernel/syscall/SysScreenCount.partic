@@ -1,0 +1,10 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.io.screen.ScreenRegistry;
+
+/** screen_count()：返回屏幕数量。 */
+class SysScreenCount implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        return (long) ScreenRegistry.getScreenCount();
+    }
+}

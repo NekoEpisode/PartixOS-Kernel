@@ -1,0 +1,26 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.process.Process;
+import kr.partix.kernel.process.ProcessManager;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
+import lang.partic.stdlib.core.memory.Memory;
+
+/** spawn(path)：从磁盘路径加载 ELF 创建子进程，返回 pid（<0 为错误码）。 */
+class SysSpawn implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        Thread t = Scheduler.current();
+        if (t == null || t.owner() == null) return -1;
+        Process owner = t.owner();
+
+        str userPath = Syscall.copyUserString(a0);
+        if (userPath == null) return -1;
+        str resolved = owner.resolvePath(userPath);
+        Memory.free((long) userPath);
+        if (resolved == null) return -1;
+
+        long pid = ProcessManager.spawnFromPath(resolved);
+        Memory.free((long) resolved);
+        return pid;
+    }
+}

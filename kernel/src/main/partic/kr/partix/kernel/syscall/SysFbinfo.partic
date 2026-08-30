@@ -1,0 +1,40 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.io.screen.IScreen;
+import kr.partix.kernel.io.screen.ScreenRegistry;
+import kr.partix.kernel.paging.AddressSpace;
+import kr.partix.kernel.process.Process;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
+import kr.partix.kernel.sys.System;
+
+/**
+ * fbinfo(screenId, buf)：写 4 个 long 到 buf：w h stride fb_addr
+ * fb_addr 是 framebuffer 映射到当前进程用户空间的虚拟地址
+ * 首次访问某屏时懒映射（AddressSpace.mapScreen）
+ */
+class SysFbinfo implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        int id = (int) a0;
+        if (a1 == 0) return -1;
+        if (id < 0 || id >= ScreenRegistry.getScreenCount()) return -1;
+        IScreen screen = ScreenRegistry.getScreen(id);
+        if (screen == null) return -1;
+
+        Thread t = Scheduler.current();
+        if (t == null || t.owner() == null) return -1;
+        Process owner = t.owner();
+        AddressSpace as = owner.addressSpace();
+        if (as == null) return -1;
+
+        long fbPhys = (long) screen.getFramebuffer();
+        long fbAddr = as.mapScreen(id, fbPhys, screen.getFramebufferSize());
+        if (fbAddr < 0) return -1;
+
+        System.write64(a1, screen.getWidth());
+        System.write64(a1 + 8, screen.getHeight());
+        System.write64(a1 + 16, screen.getStride());
+        System.write64(a1 + 24, fbAddr);
+        return 0;
+    }
+}

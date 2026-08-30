@@ -1,0 +1,29 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.process.Process;
+import kr.partix.kernel.process.ProcessManager;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
+
+/**
+ * wait(pid)：阻塞等待子进程退出，返回其退出码。
+ * 简化实现：轮询睡眠（10ms 粒度）检查子进程 exitCode；
+ * 子进程线程退出时 Scheduler.sysExit 已把退出码回写到 Process。
+ */
+class SysWait implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        long pid = a0;
+        Process child = ProcessManager.getProcess(pid);
+        if (child == null) return -1;
+
+        Thread cur = Scheduler.current();
+        if (cur == null || cur.owner() == null) return -1;
+        // 只允许父进程等待自己的直接子进程
+        if (child.parentPid() != cur.owner().pid()) return -1;
+
+        while (child.exitCode() < 0) {
+            Scheduler.sleep(10);
+        }
+        return (long) child.exitCode();
+    }
+}

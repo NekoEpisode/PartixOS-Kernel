@@ -1,6 +1,7 @@
 package kr.partix.kernel.main;
 
 import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.additional.utils.Optional;
 import lang.partic.stdlib.core.memory.Memory;
 import lang.partic.stdlib.core.exception.exception.Exception;
@@ -15,16 +16,9 @@ import kr.partix.kernel.io.screen.ScreenRegistry;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.io.screen.utils.ScreenUtils;
 import kr.partix.kernel.io.screen.utils.RGB;
-import kr.partix.kernel.utils.Point;
 import kr.partix.kernel.log.StartupLogger;
 import kr.partix.kernel.debug.StackTrace;
-import kr.partix.kernel.process.ProcessMetaBuilder;
 import kr.partix.kernel.process.ProcessManager;
-import kr.partix.kernel.process.ProcessMeta;
-import kr.partix.kernel.process.Process;
-import kr.partix.kernel.program.EmbeddedPrograms;
-import kr.partix.kernel.program.IProgram;
-import kr.partix.kernel.program.ProgramLoaderRegistry;
 import kr.partix.kernel.sched.RoundRobinScheduler;
 import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.sched.Thread;
@@ -70,13 +64,8 @@ class BspKrMain {
                 IScreen screen = optScreen.get();
                 RGB clear = new RGB((byte) 0, (byte) 0, (byte) 0);
                 ScreenUtils.fillRange(screen, 0, 0, screen.getWidth(), screen.getHeight(), clear);
-                Point point = ScreenUtils.getCenter(screen);
-                RGB rgb = new RGB((byte) 255, (byte) 0, (byte) 0);
-                ScreenUtils.fill(screen, point.getX(), point.getY(), 5, 5, rgb);
                 screen.flush(0, 0, screen.getWidth(), screen.getHeight());
-                Memory.free((long) rgb);
                 Memory.free((long) clear);
-                Memory.free((long) point);
             } else {
                 arch.getUart().println("[screen] no display, skipped");
             }
@@ -140,28 +129,23 @@ class BspKrMain {
         Scheduler.start();
     }
 
-    /** 加载内嵌用户程序并创建进程。 */
+    /** 从磁盘加载 init 程序（/bin/init）并创建进程，作为第一个用户进程。 */
     private static void bootUserProgram() {
-        // DEBUG ONLY
-        arch.getUart().println("[user] loading embedded program...");
-        byte[] uData = EmbeddedPrograms.loadUserTest();
-        if (uData != null) {
-            arch.getUart().println("[user] embedded data ok");
-            IProgram uProg = ProgramLoaderRegistry.load(uData);
-            if (uProg != null) {
-                ProcessMetaBuilder ub = new ProcessMetaBuilder();
-                ub.name("user_test");
-                ub.program(uProg);
-                ub.data(uData);
-                ProcessMeta uMeta = ub.build();
-                Process uProc = ProcessManager.createProcess(uMeta);
-                Memory.free((long) uMeta);
-                Memory.free((long) ub);
-            } else {
-                arch.getUart().println("[user] load failed");
-            }
+        // TODO 测试期临时加载 scrts 验证图形链路 完事改回 /bin/init
+        arch.getUart().println("[user] loading /bin/scrts from disk...");
+        long pid = ProcessManager.spawnFromPath("/bin/scrts");
+        if (pid >= 0) {
+            StrBuilder sb = new StrBuilder();
+            sb.append("[user] scrts spawned, pid=");
+            str pidStr = StrUtils.longToStr(pid);
+            sb.append(pidStr);
+            Memory.free(pidStr);
+            str msg = sb.build();
+            arch.getUart().println(msg);
+            Memory.free(msg);
+            sb.dispose();
         } else {
-            arch.getUart().println("[user] no embedded program");
+            arch.getUart().println("[user] /bin/scrts not found or invalid on disk");
         }
     }
 }

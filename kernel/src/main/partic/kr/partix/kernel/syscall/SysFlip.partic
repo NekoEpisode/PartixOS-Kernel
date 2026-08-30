@@ -1,0 +1,21 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.io.screen.IScreen;
+import kr.partix.kernel.io.screen.ScreenRegistry;
+
+/**
+ * flip(screenId, x, y, w, h)：刷新指定屏幕区域
+ * 用户已直接写 framebuffer，这里只发 flush
+ * riscv: VirtioGpuScreen.flush = transfer_to_host + flush
+ * x86: UefiFramebufferScreen.flush = no-op（写即显示）
+ */
+class SysFlip implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        int id = (int) a0;
+        if (id < 0 || id >= ScreenRegistry.getScreenCount()) return -1;
+        IScreen screen = ScreenRegistry.getScreen(id);
+        if (screen == null) return -1;
+        screen.flush(a1, a2, a3, a4);
+        return 0;
+    }
+}

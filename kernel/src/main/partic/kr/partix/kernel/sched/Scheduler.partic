@@ -130,6 +130,10 @@ class Scheduler {
         if (cur == null) return;
         cur.state(ThreadState.TERMINATED);
         cur.exitCode((int) code);
+        // 回写进程退出码：wait(pid) 通过 Process.exitCode 判断子进程已退出
+        if (cur.owner() != null) {
+            cur.owner().exitCode((int) code);
+        }
     }
 
     static void sysYield() {
