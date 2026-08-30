@@ -25,6 +25,7 @@ class RISCVArch implements IArch {
     private final RISCVPageTableManager ptm;
 
     private extern long fdt_get_uart_base();
+    private extern long fdt_get_uart_reg_shift();
     private extern long fdt_get_pcie_base();
 
     RISCVArch() {
@@ -33,7 +34,7 @@ class RISCVArch implements IArch {
             // UART 是调试底座，地址必须来自设备树；缺失 = 环境不完整，不能带 0 跑。
             BootFail.fail("no UART base (device tree unavailable)");
         }
-        uart = new RISCVUART(uartBase);
+        uart = new RISCVUART(uartBase, fdt_get_uart_reg_shift());
         pciIo = new RISCVPCIIO(fdt_get_pcie_base());   // 0 = 无 PCI 主机控制器
         ic = new RISCVInterruptController();
         ptm = new RISCVPageTableManager();

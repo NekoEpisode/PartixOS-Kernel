@@ -5,6 +5,9 @@ logs/
 # Auto-generated config
 buildsettings.json
 
+# Personal scripts (not for commit)
+personal/
+
 # Python
 __pycache__/
 *.pyc

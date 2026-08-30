@@ -6,9 +6,11 @@ import kr.partix.kernel.timer.Timer;
 
 class RISCVUART implements IUART {
     private final long addr;
+    private final long shift;   // FDT reg-shift：寄存器偏移 = 标准偏移 << shift（DW-APB 为 2）
 
-    RISCVUART(long addr) {
+    RISCVUART(long addr, long shift) {
         this.addr = addr;
+        this.shift = shift;
     }
 
     void print(char c) {
@@ -19,11 +21,14 @@ class RISCVUART implements IUART {
         // Wait for the transmitter to be ready (LSR bit5 = THRE).
         // Timeout (1 s) guards against a broken UART hanging the kernel;
         // on timeout the byte is dropped. Interrupts keep ticking meanwhile.
+        // DW-APB (reg-shift=2) 下 LSR 在 base+(5<<2)=base+0x14，不能按 16550
+        // 的 base+0x05 访问——那会读到 IER，THRE 永不置位导致启动即挂死。
         long deadline = Timer.getTicks() + Timer.TICK_HZ;
-        while ((System.read8(addr + 0x05) & 0x20) == 0) {
+        long lsr = addr + (5L << shift);
+        while ((System.read8(lsr) & 0x20) == 0) {
             if (Timer.getTicks() > deadline) return;
         }
-        System.write8(addr, b);
+        System.write8(addr, b);   // THR 偏移 0，shift 不影响
     }
 
     void print(str s) {
