@@ -42,10 +42,12 @@ void build_thread_frame(uint64_t *frame, uint64_t entry, uint64_t arg,
 
 // Thread entry trampoline: hands the runnable to the fixed Partic entry
 // (kr.partix.kernel.sched.KernelThreads.run) and never returns.
-extern void kr_partix_kernel_sched_KernelThreads_run__JV(long arg);
+// mangled: P_kr_partix_kernel_sched_KernelThreads.run._1_1JV
+extern void kr_kernel_threads_run(long arg)
+    __asm__("P_kr_partix_kernel_sched_KernelThreads.run._1_1JV");
 
 void kthread_entry_stub(long arg) {
-    kr_partix_kernel_sched_KernelThreads_run__JV(arg);
+    kr_kernel_threads_run(arg);
     for (;;) __asm__ volatile("wfi");
 }
 

@@ -37,6 +37,7 @@ SECTIONS
 
     .bss (NOLOAD) : {
         __bss_start = .;
+        *(.sbss*)
         *(.bss*)
         __bss_end = .;
     }

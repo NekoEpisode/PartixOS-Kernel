@@ -1,0 +1,43 @@
+package kr.partix.kernel.main.inits;
+
+import kr.partix.kernel.arch.x86.Ps2Keyboard;
+import kr.partix.kernel.fs.vfs.FileMode;
+import kr.partix.kernel.fs.vfs.KbdFileOps;
+import kr.partix.kernel.fs.vfs.VirtualRegistry;
+import kr.partix.kernel.io.input.IInputDevice;
+import kr.partix.kernel.io.input.InputRegistry;
+import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+
+/**
+ * /dev 虚拟设备文件系统：注册设备节点。
+ * Linux 式：每个输入设备一个节点 /dev/input/eventN（N = 注册序号）。
+ * 无键盘时不注册任何节点 → open("/dev/input/eventN") 失败，降级干净。
+ * 需要先跑 DriverInit/DeviceInit（驱动实例已创建），再由 FSInit 之前的
+ * VFS 虚拟设备查找生效。
+ */
+class DevFSInit {
+    static void init() {
+        VirtualRegistry.init();
+        InputRegistry.init();
+        // x86 键盘是平台设备（非 PCI），直接注册；riscv 走 virtio 驱动。
+        if (BspKrMain.arch.getArchId() == 0) {
+            InputRegistry.register(new Ps2Keyboard());
+        }
+        int n = InputRegistry.getCount();
+        for (int i = 0; i < n; i += 1) {
+            IInputDevice dev = InputRegistry.getDevice(i);
+            if (dev == null || !dev.available()) continue;
+            StrBuilder sb = new StrBuilder();
+            sb.append("/dev/input/event");
+            sb.append(StrUtils.toDec(i));
+            str path = sb.build();
+            // 注意：path 归 VirtualRegistry 所有（register 只存指针），
+            // 这里不能 free——否则注册表里的路径变成悬垂指针，后续
+            // open("/dev/input/eventN") 的 find() 比对会失败。
+            VirtualRegistry.register(path, new KbdFileOps(dev), FileMode.READ);
+            sb.dispose();
+        }
+    }
+}

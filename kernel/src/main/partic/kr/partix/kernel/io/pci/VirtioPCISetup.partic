@@ -1,0 +1,68 @@
+package kr.partix.kernel.io.pci;
+
+/**
+ * virtio over PCI 传输的公共发现逻辑（virtio-gpu / virtio-input 共用）。
+ * 扫描 BAR、遍历 capability，定位 common/notify/isr/device 四个配置区。
+ * 之前这份逻辑在两个驱动里各拷贝了一份；新增 virtio 驱动直接用这里。
+ */
+class VirtioPCISetup {
+    private static final int CAP_VENDOR = 0x09;
+    private static final int CAP_COMMON = 1;
+    private static final int CAP_NOTIFY = 2;
+    private static final int CAP_ISR    = 3;
+    private static final int CAP_DEVICE = 4;
+
+    /** 定位四个配置区 MMIO 地址；未找到的字段为 0。 */
+    static CapAddrs locate(IPCIIO pciio, int bus, int slot, int func) {
+        long[] barBases = new long[6];
+        int bi = 0;
+        while (bi < 6) {
+            long raw = (long) pciio.readConfig32(bus, slot, func, 0x10 + bi * 4);
+            long val = raw & 0xFFFFFFFFL;
+            if (val == 0) { bi += 1; continue; }
+            if ((val & 1) != 0) { bi += 1; continue; }   // IO BAR，跳过
+            int barType = (int)((val >> 1) & 3);
+            if (barType == 2) {
+                long hi = (long) pciio.readConfig32(bus, slot, func, 0x10 + (bi + 1) * 4);
+                barBases[bi] = (val & 0xFFFFFFF0L) | ((hi & 0xFFFFFFFFL) << 32);
+                bi += 2;
+            } else {
+                barBases[bi] = val & 0xFFFFFFF0L;
+                bi += 1;
+            }
+        }
+
+        CapAddrs out = new CapAddrs();
+        int capHeader = pciio.readConfig32(bus, slot, func, 0x34);
+        int cap = capHeader & 0xFF;
+        while (cap != 0) {
+            int dword0 = pciio.readConfig32(bus, slot, func, cap);
+            int dword1 = pciio.readConfig32(bus, slot, func, cap + 4);
+            int dword2 = pciio.readConfig32(bus, slot, func, cap + 8);
+
+            int capId   = dword0 & 0xFF;
+            int capNext = (dword0 >> 8) & 0xFF;
+            int cfgType = (dword0 >> 24) & 0xFF;
+            int barId   = dword1 & 0xFF;
+            long offset = (long)(dword2 & 0xFFFFFFFF);
+            long bar    = barBases[barId];
+
+            if (capId == CAP_VENDOR) {
+                if (cfgType == CAP_COMMON) out.common = bar + offset;
+                if (cfgType == CAP_NOTIFY) out.notify = bar + offset;
+                if (cfgType == CAP_ISR)    out.isr    = bar + offset;
+                if (cfgType == CAP_DEVICE) out.device = bar + offset;
+            }
+            cap = capNext;
+        }
+        return out;
+    }
+}
+
+/** locate() 的返回容器（顶层类，与 MountPoint/MountTable 同风格）。 */
+class CapAddrs {
+    long common;
+    long notify;
+    long isr;
+    long device;
+}

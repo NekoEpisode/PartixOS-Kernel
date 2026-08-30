@@ -1,0 +1,22 @@
+package kr.partix.kernel.io.input;
+
+/**
+ * 统一输入事件结构（对齐 Linux evdev / virtio_input_event）。
+ * 内核只转发原始键事件，不做字符映射——keycode → 字符由用户态决定。
+ * type: EV_KEY=1（未来可扩展 EV_REL/EV_ABS）
+ * code: evdev KEY_* keycode（KEY_A=30, KEY_ENTER=28, ...）
+ * value: 1=按下 0=释放
+ */
+class InputEvent {
+    static final int EV_KEY = 1;
+
+    int type;
+    int code;
+    int value;
+
+    InputEvent(int type, int code, int value) {
+        this.type = type;
+        this.code = code;
+        this.value = value;
+    }
+}

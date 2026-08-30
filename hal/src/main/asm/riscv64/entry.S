@@ -14,6 +14,14 @@ kern_entry:
     csrw sie, zero
     csrci sstatus, 0x2
 
+    # Enable FPU: mstatus.FS = 01 (Initial). The kernel is built hard-float
+    # (-mabi=lp64d) and libunwind's unw_getcontext saves F registers; with
+    # FS=0 the first FP instruction (e.g. unw_getcontext's fsd) traps as an
+    # illegal instruction, which previously turned any kernel exception into
+    # an infinite trap loop. Hardware raises FS to Dirty on first FP use.
+    li   t0, 0x2000
+    csrrs zero, sstatus, t0
+
     # Zero BSS
     la  t0, __bss_start
     la  t1, __bss_end

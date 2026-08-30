@@ -23,9 +23,11 @@ typedef struct {
 
 // Called from isr.s common handler — bridges interrupt to Partic.
 // Returns the frame to restore from (x86 ignores it until the scheduler lands).
-// Symbol: kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJJ
-extern long kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJJ(
-    int64_t cause, uint64_t epc, uint64_t sp, uint64_t frame);
+// Symbol: P_kr_partix_kernel_interrupt_InterruptBridge.dispatch._1_1JJJJJ
+// (mangled 名含 '.'，非合法 C 标识符，用 __asm__ 指定汇编符号名)
+extern long kr_interrupt_bridge_dispatch(
+    int64_t cause, uint64_t epc, uint64_t sp, uint64_t frame)
+    __asm__("P_kr_partix_kernel_interrupt_InterruptBridge.dispatch._1_1JJJJJ");
 
 void kernel_entry(BootInfo* info) {
     // 无 GOP 时 framebuffer 为 0，width/height/stride 不赋值（保持 0）。

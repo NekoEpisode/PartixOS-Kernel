@@ -142,8 +142,11 @@ class BspKrMain {
 
     /** 加载内嵌用户程序并创建进程。 */
     private static void bootUserProgram() {
+        // DEBUG ONLY
+        arch.getUart().println("[user] loading embedded program...");
         byte[] uData = EmbeddedPrograms.loadUserTest();
         if (uData != null) {
+            arch.getUart().println("[user] embedded data ok");
             IProgram uProg = ProgramLoaderRegistry.load(uData);
             if (uProg != null) {
                 ProcessMetaBuilder ub = new ProcessMetaBuilder();

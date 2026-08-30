@@ -1,0 +1,11 @@
+package kr.partix.kernel.io.input;
+
+/**
+ * 输入设备抽象：只产出原始键事件（keycode），字符映射留给用户态。
+ */
+interface IInputDevice {
+    boolean available();
+
+    /** 取一个待处理事件；无事件返回 null（非阻塞轮询）。 */
+    InputEvent poll();
+}

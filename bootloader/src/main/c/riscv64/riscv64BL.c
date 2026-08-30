@@ -106,7 +106,7 @@ static EFI_STATUS open_elf(EFI_BOOT_SERVICES* bs, EFI_HANDLE img, VOID** out, UI
     return s;
 }
 
-static UINT64 load_elf(EFI_BOOT_SERVICES* bs, VOID* elf) {
+static UINT64 load_elf(EFI_BOOT_SERVICES* bs, EFI_HANDLE img, VOID* elf, BootInfo* info) {
     Elf64_Ehdr* eh = elf;
     Elf64_Phdr* ph = (Elf64_Phdr*)((UINT8*)elf + eh->e_phoff);
     UINT64 lo = ~0ULL, hi = 0;
@@ -119,24 +119,30 @@ static UINT64 load_elf(EFI_BOOT_SERVICES* bs, VOID* elf) {
     UINTN pages = (hi - lo + 4095) / 4096;
     EFI_PHYSICAL_ADDRESS base = lo & ~0xFFFULL;
     bs->AllocatePages(AllocateAddress, EfiLoaderCode, pages, &base);
+
+    // 段拷贝必须在 ExitBootServices 之前完成：u-boot 退出后 MMU/内存
+    // 状态不可靠，memcpy 可能写错地方（曾导致 trap_entry 内存为全 0）。
+    // 只拷文件段（filesz），bss 由 kernel 入口（kern_entry）自清——
+    // 不在这里 memset，避免把仍在提供 EFI 服务的 u-boot 后部代码清掉。
     for (UINTN i = 0; i < eh->e_phnum; i++) {
         if (ph[i].p_type != PT_LOAD || ph[i].p_memsz == 0) continue;
         UINT64 d = ph[i].p_vaddr;
         if (ph[i].p_filesz > 0)
             memcpy((VOID*)d, (UINT8*)elf + ph[i].p_offset, ph[i].p_filesz);
-        if (ph[i].p_memsz > ph[i].p_filesz)
-            memset((VOID*)(d + ph[i].p_filesz), 0, ph[i].p_memsz - ph[i].p_filesz);
     }
-    return eh->e_entry;
-}
 
-static void __attribute__((noreturn)) exit_boot(EFI_BOOT_SERVICES* bs, EFI_HANDLE img, UINT64 entry, BootInfo* info) {
+    // ExitBootServices 前完成所有 EFI 服务调用（GetMemoryMap 等）。
     UINTN sz = 0, key = 0, dsc = 0; UINT32 ver = 0;
     bs->GetMemoryMap(&sz, 0, &key, &dsc, &ver); sz += 4096;
     EFI_MEMORY_DESCRIPTOR* mm;
     bs->AllocatePool(EfiBootServicesData, sz, (VOID**)&mm);
     while (1) { bs->GetMemoryMap(&sz, mm, &key, &dsc, &ver); if (!EFI_ERROR(bs->ExitBootServices(img, key))) break; }
     info->memoryMap = (UINT64)mm; info->memoryMapSize = sz; info->memoryMapDescriptorSize = dsc;
+
+    return eh->e_entry;
+}
+
+static void __attribute__((noreturn)) jump_kernel(UINT64 entry, BootInfo* info) {
     ((KernEntry)entry)(info); while (1) __asm__ volatile("wfi");
 }
 
@@ -172,7 +178,8 @@ EFI_STATUS EFIAPI efi_main(EFI_HANDLE h, EFI_SYSTEM_TABLE* st) {
         while (1);
     }
 
-    UINT64 entry = load_elf(bs, elf);
-    bs->FreePool(elf);
-    exit_boot(bs, h, entry, &info);
+    UINT64 entry = load_elf(bs, h, elf, &info);
+    // ExitBootServices 已在 load_elf 内完成，此后不能再调 EFI 服务
+    // （包括 FreePool）；这块缓冲留给 kernel 接管后的内存池。
+    jump_kernel(entry, &info);
 }

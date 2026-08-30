@@ -1,0 +1,13 @@
+package kr.partix.kernel.io.drivers.input;
+
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.input.IInputDevice;
+
+/**
+ * 输入驱动：匹配输入设备并产出输入设备实例。
+ * 与 IDiskDriver/IDisplayDriver 同构——子接口 extends IDriver，
+ * 驱动注册中心拿到的是 IDriver，向下转型到此接口是合法的。
+ */
+interface IInputDriver extends IDriver {
+    IInputDevice getInputDevice();
+}

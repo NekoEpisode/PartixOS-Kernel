@@ -1,0 +1,60 @@
+package kr.partix.kernel.fs.vfs;
+
+import kr.partix.kernel.io.input.IInputDevice;
+import kr.partix.kernel.io.input.InputEvent;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.timer.Timer;
+
+/**
+ * /dev/input/eventN 设备节点：把**指定**输入设备的键事件暴露给用户态。
+ *
+ * read 返回原始事件（不对齐字符），格式 = 内核 input 事件：
+ *   [0..1] type（EV_KEY=1；SYN 等边界事件已由 VirtioInputDriver.poll 过滤）
+ *   [2..3] code（evdev KEY_* keycode）
+ *   [4..7] value（1=按下 0=松开）
+ * 一次 read 返回一个事件（8 字节）；**无事件时真阻塞**：用 Scheduler.sleep
+ * 把线程挂起（切出运行队列、中断恢复、定时器唤醒），至多等 100ms 后返回 0。
+ * 不能用 yield 忙等：syscall 上下文 SIE=0，内核态 spin 会屏蔽定时器
+ * （Timer.getTicks 冻结、睡眠线程永不唤醒）。
+ * keycode → 字符的映射由用户态完成。
+ */
+class KbdFileOps implements IFileOps {
+    private IInputDevice dev;
+
+    /** 绑定到指定输入设备（DevFSInit 按 InputRegistry 每个设备建一个节点）。 */
+    KbdFileOps(IInputDevice dev) {
+        this.dev = dev;
+    }
+
+    public int read(FileDescriptor fd, byte[] buf, int len) {
+        // 节点只对可用设备创建，正常不会走到；无设备按"无事件"处理。
+        if (dev == null) return 0;
+        if (len < 8) return -1;
+
+        // 真阻塞：无事件时 sleep 切片轮询（线程挂起而非忙等）。
+        // sleep 期间定时器正常跑、kthreads 正常调度；唤醒后重试。
+        long deadline = Timer.getTicks() + Timer.TICK_HZ / 10;
+        InputEvent ev = dev.poll();
+        while (ev == null) {
+            if (Timer.getTicks() >= deadline) return 0;   // 100ms 超时 = 无事件
+            Scheduler.sleep(10);
+            ev = dev.poll();
+        }
+        buf[0] = (byte) (ev.type & 0xFF);
+        buf[1] = (byte) ((ev.type >> 8) & 0xFF);
+        buf[2] = (byte) (ev.code & 0xFF);
+        buf[3] = (byte) ((ev.code >> 8) & 0xFF);
+        buf[4] = (byte) (ev.value & 0xFF);
+        buf[5] = (byte) ((ev.value >> 8) & 0xFF);
+        buf[6] = (byte) ((ev.value >> 16) & 0xFF);
+        buf[7] = (byte) ((ev.value >> 24) & 0xFF);
+        return 8;
+    }
+
+    public int write(FileDescriptor fd, byte[] buf, int len) -> -1
+
+    public long seek(FileDescriptor fd, long offset, int whence) -> -1
+
+    public void close(FileDescriptor fd) {
+    }
+}

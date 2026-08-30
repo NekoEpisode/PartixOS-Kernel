@@ -6,4 +6,6 @@ class SyscallNum {
     static final int YIELD = 2;
     static final int SLEEP = 3;
     static final int GETTID = 4;
+    static final int OPEN = 5;
+    static final int READ = 6;
 }

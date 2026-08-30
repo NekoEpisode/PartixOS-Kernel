@@ -5,8 +5,10 @@ import kr.partix.kernel.io.drivers.DriverType;
 import kr.partix.kernel.io.drivers.display.IDisplayDriver;
 import kr.partix.kernel.device.BusType;
 import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.io.pci.CapAddrs;
 import kr.partix.kernel.io.pci.PCIDevice;
 import kr.partix.kernel.io.pci.IPCIIO;
+import kr.partix.kernel.io.pci.VirtioPCISetup;
 import kr.partix.kernel.io.screen.IScreen;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.main.BspKrMain;
@@ -41,12 +43,6 @@ class VirtioGpuDriver implements IDisplayDriver {
     private static final int VIRTIO_STATUS_DRIVER_OK  = 4;
     private static final int VIRTIO_STATUS_FEATURES_OK = 8;
     private static final int VIRTIO_STATUS_FAILED      = 128;
-
-    private static final int CAP_VENDOR = 0x09;
-    private static final int CAP_COMMON = 1;
-    private static final int CAP_NOTIFY = 2;
-    private static final int CAP_ISR    = 3;
-    private static final int CAP_DEVICE = 4;
 
     private extern int virtq_struct_size();
     private extern int virtio_gpu_dev_size();
@@ -89,57 +85,13 @@ class VirtioGpuDriver implements IDisplayDriver {
 
     private void initDevice() {
         IPCIIO pciio = BspKrMain.arch.getPciIo();
-        int bus = device.bus;
-        int slot = device.slot;
-        int func = device.func;
 
-        long commonPhys = 0;
-        long notifyPhys = 0;
-        long isrPhys = 0;
-        long devicePhys = 0;
-
-        long[] barBases = new long[6];
-        int bi = 0;
-        while (bi < 6) {
-            long raw = (long) pciio.readConfig32(bus, slot, func, 0x10 + bi * 4);
-            long val = raw & 0xFFFFFFFFL;
-            if (val == 0) { bi++; continue; }
-            if ((val & 1) != 0) { bi++; continue; }
-            int barType = (int)((val >> 1) & 3);
-            if (barType == 2) {
-                long hi = (long) pciio.readConfig32(bus, slot, func, 0x10 + (bi + 1) * 4);
-                barBases[bi] = (val & 0xFFFFFFF0L) | ((hi & 0xFFFFFFFFL) << 32);
-                bi += 2;
-            } else {
-                barBases[bi] = val & 0xFFFFFFF0L;
-                bi++;
-            }
-        }
-
-        int capHeader = pciio.readConfig32(bus, slot, func, 0x34);
-        int cap = capHeader & 0xFF;
-
-        while (cap != 0) {
-            int dword0 = pciio.readConfig32(bus, slot, func, cap);
-            int dword1 = pciio.readConfig32(bus, slot, func, cap + 4);
-            int dword2 = pciio.readConfig32(bus, slot, func, cap + 8);
-
-            int capId   = dword0 & 0xFF;
-            int capNext = (dword0 >> 8) & 0xFF;
-            int cfgType = (dword0 >> 24) & 0xFF;
-            int barId   = dword1 & 0xFF;
-            long offset = (long)(dword2 & 0xFFFFFFFF);
-            long bar    = barBases[barId];
-
-            if (capId == CAP_VENDOR) {
-                if (cfgType == CAP_COMMON) commonPhys = bar + offset;
-                if (cfgType == CAP_NOTIFY) notifyPhys = bar + offset;
-                if (cfgType == CAP_ISR)    isrPhys    = bar + offset;
-                if (cfgType == CAP_DEVICE) devicePhys = bar + offset;
-            }
-
-            cap = capNext;
-        }
+        // BAR 扫描 + capability 发现（与 virtio-input 共用一份实现）
+        CapAddrs caps = VirtioPCISetup.locate(pciio, device.bus, device.slot, device.func);
+        long commonPhys = caps.common;
+        long notifyPhys = caps.notify;
+        long isrPhys = caps.isr;
+        long devicePhys = caps.device;
         if (commonPhys == 0) return;
 
         virtio_pci_set_status(commonPhys, (byte)0);
@@ -178,6 +130,9 @@ class VirtioGpuDriver implements IDisplayDriver {
         long availAligned = (availSize + 4095) & ~4095;
         long usedAligned  = (usedSize  + 4095) & ~4095;
 
+        // 注意：以下环/命令缓冲地址是 Memory.malloc 的虚拟地址，直接当
+        // 物理地址写进 virtio 寄存器——依赖内核恒等映射（VA==PA）。将来
+        // 上非恒等映射前必须先做 VA→PA 转换（virtio-input 同样假设）。
         long descPhys  = Memory.malloc((int)descAligned);
         long availPhys = Memory.malloc((int)availAligned);
         long usedPhys  = Memory.malloc((int)usedAligned);

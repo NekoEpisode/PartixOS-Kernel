@@ -18,6 +18,8 @@ class Syscall {
         register(SyscallNum.YIELD, new SysYield());
         register(SyscallNum.SLEEP, new SysSleep());
         register(SyscallNum.GETTID, new SysGetTid());
+        register(SyscallNum.OPEN, new SysOpen());
+        register(SyscallNum.READ, new SysRead());
     }
 
     static void register(int num, ISyscallHandler handler) {

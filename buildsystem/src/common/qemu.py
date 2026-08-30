@@ -291,9 +291,6 @@ def launch_qemu(run: QemuRunConfig, disk: Path, arch: str = "x86_64", extra: str
             *fw,
             "-m", run.memory,
             "-drive", f"file={disk},format=raw,if=none,id=drive0",
-            "-device", "ich9-ahci,id=ahci",
-            "-device", "ide-hd,drive=drive0,bus=ahci.0",
-            "-device", "virtio-gpu-pci",
         ]
     elif is_riscv:
         vars_fd = Path("build") / "partix_VARS.fd"
@@ -313,9 +310,6 @@ def launch_qemu(run: QemuRunConfig, disk: Path, arch: str = "x86_64", extra: str
             "-drive", f"if=pflash,format=raw,unit=0,file={run.ovmf_code},readonly=on",
             "-drive", f"if=pflash,format=raw,unit=1,file={vars_fd}",
             "-drive", f"file={disk},format=raw,if=none,id=drive0",
-            "-device", "ich9-ahci,id=ahci",
-            "-device", "ide-hd,drive=drive0,bus=ahci.0",
-            "-device", "virtio-gpu-pci",
         ]
     else:
         cmd = [
@@ -330,9 +324,7 @@ def launch_qemu(run: QemuRunConfig, disk: Path, arch: str = "x86_64", extra: str
             cmd += [
                 "-drive", f"if=pflash,format=raw,file={ovmf_vars_local}",
             ]
-        cmd += ["-drive", f"file={disk},format=raw,if=none,id=drive0",
-                "-device", "ich9-ahci,id=ahci",
-                "-device", "ide-hd,drive=drive0,bus=ahci.0"]
+        cmd += ["-drive", f"file={disk},format=raw,if=none,id=drive0"]
 
     user_args = run.extra_args.split() + extra.split()
     i = 0
@@ -345,7 +337,15 @@ def launch_qemu(run: QemuRunConfig, disk: Path, arch: str = "x86_64", extra: str
         if arg.startswith("-"):
             if arg in cmd:
                 idx = cmd.index(arg)
-                if i + 1 < len(user_args) and not user_args[i + 1].startswith("-"):
+                if arg in ("-device", "-drive", "-netdev"):
+                    # 可重复参数：追加而不是替换第一个实例
+                    cmd.append(arg)
+                    if i + 1 < len(user_args) and not user_args[i + 1].startswith("-"):
+                        cmd.append(user_args[i + 1])
+                        i += 2
+                    else:
+                        i += 1
+                elif i + 1 < len(user_args) and not user_args[i + 1].startswith("-"):
                     if idx + 1 < len(cmd) and not cmd[idx + 1].startswith("-"):
                         cmd[idx + 1] = user_args[i + 1]
                     else:

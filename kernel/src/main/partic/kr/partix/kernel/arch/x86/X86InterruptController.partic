@@ -142,7 +142,13 @@ class X86InterruptController implements IInterruptController {
 
         IInterruptHandler h = handlers[vector];
         IInterruptData data = null;
-        if (h != null) h.handle(vector, data);
+        if (h != null) {
+            h.handle(vector, data);
+            eoi(vector);
+            return 0;
+        }
+        // 无 handler 的中断才进事件系统（UnknownInterruptEventListener 报日志）。
+        // 之前无条件 fire，导致已处理的 IRQ1（PS/2 键盘）也打 "unhandled"。
         Interrupt.fire(vector, epc, sp, data);
         eoi(vector);
         return 0;

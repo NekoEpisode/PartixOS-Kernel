@@ -18,14 +18,16 @@ typedef struct {
 
 // Called from entry.S trap_entry. Returns the frame to restore from
 // (same frame when no context switch happened).
-// Symbol in .ll: kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJJ
-extern long kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJJ(
-    int64_t cause, uint64_t epc, uint64_t sp, uint64_t frame);
+// Symbol in .ll: P_kr_partix_kernel_interrupt_InterruptBridge.dispatch._1_1JJJJJ
+// (mangled 名含 '.'，非合法 C 标识符，用 __asm__ 指定汇编符号名)
+extern long kr_interrupt_bridge_dispatch(
+    int64_t cause, uint64_t epc, uint64_t sp, uint64_t frame)
+    __asm__("P_kr_partix_kernel_interrupt_InterruptBridge.dispatch._1_1JJJJJ");
 
 long trap_dispatch(uint64_t cause, uint64_t epc, void* frame) {
     uint64_t sp;
     __asm__ volatile("mv %0, sp" : "=r"(sp));
-    return kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJJ(
+    return kr_interrupt_bridge_dispatch(
         (int64_t)cause, epc, sp, (uint64_t)frame);
 }
 

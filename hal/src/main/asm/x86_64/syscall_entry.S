@@ -72,7 +72,7 @@ syscall_entry:
     movq 136(%rsp), %rsi
     movq %rsp, %rdx
 
-    call kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJJ
+    call P_kr_partix_kernel_interrupt_InterruptBridge.dispatch._1_1JJJJJ
 
     # Restore from the returned frame (same frame if no context switch)
     movq %rax, %rsp

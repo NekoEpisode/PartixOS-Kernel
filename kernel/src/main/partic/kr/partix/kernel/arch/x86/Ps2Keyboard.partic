@@ -1,0 +1,61 @@
+package kr.partix.kernel.arch.x86;
+
+import kr.partix.kernel.io.input.IInputDevice;
+import kr.partix.kernel.io.input.InputEvent;
+import kr.partix.kernel.interrupt.IInterruptHandler;
+import kr.partix.kernel.interrupt.IInterruptData;
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.log.StartupLogger;
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * x86 PS/2 键盘：8042 控制器 + IRQ1 中断。
+ * 中断里读 scancode 转 evdev keycode 进环形缓冲；poll 取事件。
+ * keycode → 字符映射留给用户态。
+ */
+class Ps2Keyboard implements IInputDevice, IInterruptHandler {
+    private static final int IRQ1_VECTOR = 0x21;
+
+    private boolean ok;
+
+    private extern int ps2kbd_init();
+    private extern void ps2kbd_irq();
+    private extern int ps2kbd_poll(long evOut);
+
+    Ps2Keyboard() {
+        int r = ps2kbd_init();
+        if (r != 0) {
+            StartupLogger.warn("ps2: keyboard init failed");
+            return;
+        }
+        // 挂 IRQ1 并解屏蔽
+        BspKrMain.arch.getInterruptController().registerHandler(IRQ1_VECTOR, this);
+        BspKrMain.arch.getInterruptController().enable(IRQ1_VECTOR);
+        ok = true;
+        StartupLogger.info("ps2: keyboard ready");
+    }
+
+    boolean available() -> ok
+
+    /** IRQ1 中断入口：交给 HAL 读 scancode 进环形缓冲。 */
+    public void handle(int vector, IInterruptData data) {
+        ps2kbd_irq();
+    }
+
+    /** 取一个待处理事件；无事件返回 null。 */
+    public InputEvent poll() {
+        if (!ok) return null;
+        long evBuf = Memory.malloc(8);
+        int r = ps2kbd_poll(evBuf);
+        if (r == 0) {
+            Memory.free(evBuf);
+            return null;
+        }
+        int type  = ((int) System.read16(evBuf + 0)) & 0xFFFF;
+        int code  = ((int) System.read16(evBuf + 2)) & 0xFFFF;
+        int value = System.read32(evBuf + 4);
+        Memory.free(evBuf);
+        return new InputEvent(type, code, value);
+    }
+}

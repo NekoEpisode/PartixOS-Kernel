@@ -13,6 +13,10 @@ int virtq_struct_size(void) {
     return (int)sizeof(virtq_t);
 }
 
+// 注意：desc_phys / avail_phys / used_phys 名为"物理地址"，实际是驱动
+// 传入的 Memory.malloc 虚拟地址——能工作全靠内核恒等映射（VA == PA）。
+// 将来上非恒等映射时必须先做 VA→PA 转换（见驱动侧注释）。
+
 void virtq_init(virtq_t *q, uint64_t desc_phys, uint64_t avail_phys,
                 uint64_t used_phys, uint16_t queue_size) {
     q->desc_phys  = desc_phys;
@@ -54,10 +58,13 @@ void virtq_fill_desc(virtq_t *q, uint16_t desc_idx,
 }
 
 void virtq_submit(virtq_t *q, uint16_t desc_idx) {
-    uint16_t avail_idx = q->avail->idx % q->queue_size;
+    // avail->idx 是单调递增计数器（virtio 规范）：设备比较前后值判断
+    // 是否有新描述符。这里不能取模后再 +1，否则 idx 会回绕、永远小于
+    // queue_size，设备感知不到新提交。ring 下标才需要取模。
+    uint16_t avail_idx = (uint16_t)(q->avail->idx % q->queue_size);
     q->avail->ring[avail_idx] = desc_idx;
     VIRTIO_FENCE();
-    q->avail->idx = (uint16_t)(avail_idx + 1);
+    q->avail->idx = (uint16_t)(q->avail->idx + 1);
     VIRTIO_FENCE();
 }
 

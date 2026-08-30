@@ -1,0 +1,49 @@
+package kr.partix.kernel.io.input;
+
+import kr.partix.kernel.io.drivers.DriverRegistry;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.drivers.input.IInputDriver;
+
+/**
+ * 输入设备注册中心：从 DriverRegistry 的 INPUT 驱动实例收集输入设备。
+ * DevFSInit 按设备建 /dev/input/eventN 节点（Linux 式，每设备一节点）。
+ *
+ * TODO(规划)：事件驱动化改造——设备(中断驱动) → EventBus 发布 InputEvent
+ * → 监听器路由进对应 /dev/input/eventN 的环形缓冲 → 用户态 read 消费。
+ * 前置条件：① virtio-input 改为中断驱动（现为轮询，轮询设备没有"事件
+ * 发生"的触发点，事件只能在被 poll 到的那一刻发出）；② io.input.InputEvent
+ * 改名，避免与未来 event.events.InputEvent 冲突。键速下 EventBus 同步
+ * 分发 + 小对象分配/释放的开销可忽略，性能不是问题。
+ */
+class InputRegistry {
+    private static IInputDevice[] devices = new IInputDevice[8];
+    private static int count;
+
+    static void init() {
+        count = 0;
+        IDriver[] drivers = DriverRegistry.findAll(DriverType.INPUT);
+        for (int i = 0; i < drivers.length; i++) {
+            if (drivers[i] == null) continue;
+            // IInputDriver extends IDriver，向下转型合法（同 DiskRegistry）
+            IInputDevice dev = ((IInputDriver) drivers[i]).getInputDevice();
+            if (dev == null || !dev.available()) continue;
+            register(dev);
+        }
+    }
+
+    /** 显式注册一个输入设备（如 x86 平台 PS/2 键盘）。 */
+    static void register(IInputDevice dev) {
+        if (dev == null || !dev.available()) return;
+        if (count < devices.length) {
+            devices[count] = dev;
+            count += 1;
+        }
+    }
+
+    /** 已注册输入设备数（用于按设备建 /dev/input/eventN 节点）。 */
+    static int getCount() -> count
+
+    /** 第 i 个输入设备（Linux 式：一个设备对应一个 event 节点）。 */
+    static IInputDevice getDevice(int i) -> devices[i]
+}

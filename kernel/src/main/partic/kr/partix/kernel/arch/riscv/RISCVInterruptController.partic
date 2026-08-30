@@ -107,8 +107,12 @@ class RISCVInterruptController implements IInterruptController {
                 // Supervisor external interrupt: claim the PLIC source.
                 int irq = System.read32(plicBase + PLIC_CTX_CLAIM);
                 IInterruptHandler h = handlers[irq];
-                if (h != null) h.handle(irq, null);
-                Interrupt.fire(irq, epc, sp, null);
+                if (h != null) {
+                    h.handle(irq, null);
+                } else {
+                    // 无 handler 的外部中断才报"未处理"（避免已处理的中断误报）
+                    Interrupt.fire(irq, epc, sp, null);
+                }
                 System.write32(plicBase + PLIC_CTX_CLAIM, irq);
                 return 0;
             }
@@ -157,10 +161,14 @@ class RISCVInterruptController implements IInterruptController {
             BootFail.fail("kernel page fault");
         }
 
-        // Synchronous exception — report with the exception code as vector.
+        // Synchronous exception — report with the exception code as vector,
+        // but only when no handler claims it（否则是"已处理"，不是"未处理"）。
         int vector = (int) code;
         IInterruptHandler h = handlers[vector];
-        if (h != null) h.handle(vector, null);
+        if (h != null) {
+            h.handle(vector, null);
+            return 0;
+        }
         Interrupt.fire(vector, epc, sp, null);
         return 0;
     }

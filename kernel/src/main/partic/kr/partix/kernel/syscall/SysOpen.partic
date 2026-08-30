@@ -1,0 +1,29 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.fs.vfs.VFS;
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.core.memory.Memory;
+
+/** open(path, mode)：打开虚拟/磁盘文件，返回 fd（<0 为错误码）。 */
+class SysOpen implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        // a0 = 用户态路径指针（字节串）；先转成 Partic str 再交给 VFS。
+        // 简化为按长度拷贝：路径以 0 结尾，最多 256 字节。
+        long p = a0;
+        int len = 0;
+        while (len < 256) {
+            byte b = (byte) System.read8(p + len);
+            if (b == 0) break;
+            len += 1;
+        }
+        if (len == 0) return -1;
+        str path = (str) Memory.malloc(len + 1);
+        for (int i = 0; i < len; i += 1) {
+            path[i] = (byte) System.read8(p + i);
+        }
+        path[len] = (byte) 0;
+        int fd = VFS.open(path, (int) a1);
+        Memory.free((long) path);
+        return (long) fd;
+    }
+}

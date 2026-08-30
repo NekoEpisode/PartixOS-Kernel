@@ -1,0 +1,173 @@
+package kr.partix.kernel.io.drivers.input.virtio;
+
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.input.IInputDriver;
+import kr.partix.kernel.io.input.IInputDevice;
+import kr.partix.kernel.io.input.InputEvent;
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.io.pci.CapAddrs;
+import kr.partix.kernel.io.pci.PCIDevice;
+import kr.partix.kernel.io.pci.IPCIIO;
+import kr.partix.kernel.io.pci.VirtioPCISetup;
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.timer.Timer;
+import kr.partix.kernel.log.StartupLogger;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * virtio-input 键盘驱动（riscv / x86 通用，PCI 传输）。
+ *
+ * 只做两件事：发现并初始化 eventq，把 virtio_input_event 轮询出来。
+ * code 本身就是 evdev keycode（KEY_*），原样转发——不做字符映射。
+ * 复用 virtio_queue.c / virtio_pci.c 公共层（与 virtio-gpu 相同）。
+ */
+class VirtioInputDriverTemplate implements IDriver {
+    int getType() -> DriverType.INPUT
+
+    str description() -> "Virtio input driver - provides keyboard"
+
+    boolean match(IDevice device) {
+        if (device.getBusType() != BusType.PCI) return false;
+        if (!(device instanceof PCIDevice)) return false;
+        PCIDevice p = (PCIDevice) device;
+        // virtio input 设备（键盘/鼠标/平板共用）PCI id 固定 0x1052
+        // （VIRTIO_ID_INPUT=18 → 0x1040+18）。不要用 classCode 匹配：
+        // 0x03 是显示类，曾把 virtio-GPU 误匹配成键盘（GPU 枚举在前、
+        // 实例先注册，InputRegistry 拿到假键盘，真实键盘收不到事件）。
+        return p.vendorId == 0x1AF4 && p.deviceId == 0x1052;
+    }
+
+    IDriver create(IDevice d) -> new VirtioInputDriver((PCIDevice) d)
+}
+
+class VirtioInputDriver implements IInputDriver, IInputDevice {
+    private final PCIDevice device;
+    private long devStruct;
+    private boolean ok;
+
+    str description() -> "Virtio input driver - provides keyboard"
+
+    private static final int VIRTIO_STATUS_ACKNOWLEDGE = 1;
+    private static final int VIRTIO_STATUS_DRIVER     = 2;
+    private static final int VIRTIO_STATUS_DRIVER_OK  = 4;
+    private static final int VIRTIO_STATUS_FEATURES_OK = 8;
+
+    private extern int virtio_input_dev_size();
+    private extern void virtio_input_dev_init(long dev, long commonPhys,
+                                              long notifyPhys, long descPhys,
+                                              long availPhys, long usedPhys,
+                                              int queueSize);
+    private extern int virtio_input_poll(long dev, long evOut);
+
+    private extern void virtq_init(long q, long descPhys, long availPhys,
+                                   long usedPhys, int size);
+    private extern void virtio_pci_set_status(long common, byte status);
+    private extern byte virtio_pci_get_status(long common);
+    private extern void virtio_pci_select_queue(long common, int idx);
+    private extern void virtio_pci_set_queue(long common, long desc,
+                                             long driver, long device);
+    private extern void virtio_pci_enable_queue(long common);
+    private extern void virtio_pci_disable_interrupts(long common);
+    private extern int virtio_pci_get_queue_size(long common);
+    private extern int virtio_pci_get_features(long common);
+    private extern void virtio_pci_set_features(long common, int features);
+
+    VirtioInputDriver(PCIDevice device) {
+        this.device = device;
+        initDevice();
+    }
+
+    int getType() -> DriverType.INPUT
+    boolean match(IDevice d) -> false
+    IDriver create(IDevice d) -> this
+
+    /** IInputDriver：返回输入设备实例（驱动自身即设备）。 */
+    IInputDevice getInputDevice() -> this
+
+    boolean available() -> ok
+
+    /** 轮询一个事件；无事件返回 null。EV_SYN 等非 EV_KEY 事件在驱动层丢弃。 */
+    InputEvent poll() {
+        if (!ok) return null;
+        long evBuf = Memory.malloc(8);
+        while (true) {
+            int r = virtio_input_poll(devStruct, evBuf);
+            if (r == 0) {
+                Memory.free(evBuf);
+                return null;
+            }
+            int type  = ((int) System.read16(evBuf + 0)) & 0xFFFF;
+            int code  = ((int) System.read16(evBuf + 2)) & 0xFFFF;
+            int value = System.read32(evBuf + 4);
+            // virtio-input 事件流：EV_KEY(1) + EV_SYN(0) 边界。SYN 只是
+            // "这批事件原子"的分隔符，对用户态无意义——驱动层直接跳过，
+            // 用户态只会收到 EV_KEY（code=evdev keycode, value=1/0 按下/松开）。
+            if (type != InputEvent.EV_KEY) continue;
+            Memory.free(evBuf);
+            return new InputEvent(type, code, value);
+        }
+    }
+
+    private void initDevice() {
+        IPCIIO pciio = BspKrMain.arch.getPciIo();
+
+        // BAR 扫描 + capability 发现（与 virtio-gpu 共用一份实现）
+        CapAddrs caps = VirtioPCISetup.locate(pciio, device.bus, device.slot, device.func);
+        long commonPhys = caps.common;
+        long notifyPhys = caps.notify;
+        if (commonPhys == 0) return;
+
+        virtio_pci_set_status(commonPhys, (byte)0);
+        long resetDeadline = Timer.getTicks() + Timer.TICK_HZ / 2;
+        while (Timer.getTicks() < resetDeadline) {
+            if (virtio_pci_get_status(commonPhys) == 0) break;
+        }
+        virtio_pci_set_status(commonPhys, (byte)VIRTIO_STATUS_ACKNOWLEDGE);
+        virtio_pci_set_status(commonPhys, (byte)(VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER));
+
+        int features = virtio_pci_get_features(commonPhys);
+        virtio_pci_set_features(commonPhys, features);
+
+        virtio_pci_set_status(commonPhys,
+            (byte)(VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER | VIRTIO_STATUS_FEATURES_OK));
+
+        // eventq = queue 0（statusq 是 LED 反馈，键盘不需要）
+        virtio_pci_select_queue(commonPhys, 0);
+        int qSize = virtio_pci_get_queue_size(commonPhys);
+        if (qSize < 1) qSize = 64;
+        if (qSize > 64) qSize = 64;   // ring 槽上限
+
+        long descSize  = (long)qSize * 16;
+        long availSize = 4 + (long)qSize * 2 + 2;
+        long usedSize  = 4 + (long)qSize * 8 + 2;
+        long descAligned  = (descSize  + 4095) & ~4095;
+        long availAligned = (availSize + 4095) & ~4095;
+        long usedAligned  = (usedSize  + 4095) & ~4095;
+
+        // 注意：以下环地址是 Memory.malloc 的虚拟地址，直接当物理地址写进
+        // virtio 寄存器——依赖内核恒等映射（VA==PA）。将来上非恒等映射前
+        // 必须先做 VA→PA 转换（virtio-gpu 与 virtio_queue.c 同样假设）。
+        long descPhys  = Memory.malloc((int)descAligned);
+        long availPhys = Memory.malloc((int)availAligned);
+        long usedPhys  = Memory.malloc((int)usedAligned);
+
+        int devSize = virtio_input_dev_size();
+        devStruct = Memory.malloc(devSize + 15);
+        devStruct = (devStruct + 15) & ~15;
+
+        virtio_input_dev_init(devStruct, commonPhys, notifyPhys,
+                              descPhys, availPhys, usedPhys, qSize);
+        virtio_pci_set_queue(commonPhys, descPhys, availPhys, usedPhys);
+        virtio_pci_disable_interrupts(commonPhys);
+        virtio_pci_enable_queue(commonPhys);
+
+        virtio_pci_set_status(commonPhys,
+            (byte)(VIRTIO_STATUS_ACKNOWLEDGE | VIRTIO_STATUS_DRIVER |
+                   VIRTIO_STATUS_FEATURES_OK | VIRTIO_STATUS_DRIVER_OK));
+        ok = true;
+        StartupLogger.info("virtio-input: keyboard ready");
+    }
+}
