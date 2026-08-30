@@ -292,55 +292,52 @@ ISR_NOERR 255
 #   +160     RSP
 #   +168     SS
 #   +176     kernel stack top (for TSS.RSP0 in the x86 milestone)
-# ring0 interrupts only push [RIP][CS][RFLAGS]; a synthetic SS(current)+RSP
-# is fabricated so iretq (64-bit, always pops/loads RSP/SS) restores exactly.
+#
+# The CPU ALWAYS pushes the full 5-slot frame [SS][RSP][RFLAGS][CS][RIP]
+# (plus the error code for vectors that have one) on interrupt entry,
+# regardless of privilege (QEMU do_interrupt64 pushes unconditionally, and
+# 64-bit IRETQ pops all five). So at entry the stack already holds
+# [vector][errcode][RIP][CS][RFLAGS][RSP][SS]; no rebuilding is needed —
+# saving the GP regs on top turns those 7 CPU-pushed slots directly into
+# the frame's +120..+176 slots, which restore_frame pops exactly.
 .align 16
 isr_common:
-    # rsp → [vector][errcode][RIP][CS][RFLAGS]         (ring0)
-    #    or [vector][errcode][RIP][CS][RFLAGS][RSP][SS] (ring3)
-    pushq %rax                    # save interrupted rax; raw frame now at rsp+8
-    testb $3, 32(%rsp)            # CS RPL (raw CS at rsp+8+24)
-    jnz 1f
-    # ── ring0: rebuild with synthetic SS(current) + RSP(interrupted) ──
-    xorq %rax, %rax
-    mov  %ss, %ax
-    pushq %rax                    # SS   (+168)
-    leaq 56(%rsp), %rax           # interrupted rsp = rsp + 8(saved) + 40
-    pushq %rax                    # RSP  (+160)
-    pushq 56(%rsp)                # RFLAGS (raw +40)
-    pushq 56(%rsp)                # CS     (raw +32)
-    pushq 56(%rsp)                # RIP    (raw +24)
-    pushq 56(%rsp)                # errcode(raw +16)
-    pushq 56(%rsp)                # vector (raw +8)
-    jmp 2f
-1:
-    # ── ring3: rebuild the 7 raw slots ──
-    pushq 56(%rsp)                # SS     (raw +56)
-    pushq 56(%rsp)                # RSP    (raw +48)
-    pushq 56(%rsp)                # RFLAGS (raw +40)
-    pushq 56(%rsp)                # CS     (raw +32)
-    pushq 56(%rsp)                # RIP    (raw +24)
-    pushq 56(%rsp)                # errcode(raw +16)
-    pushq 56(%rsp)                # vector (raw +8)
-2:
-    # rsp → [vector][errcode][RIP][CS][RFLAGS][RSP][SS]; interrupted rax at rsp+56
-    # Save GP regs: r15 at +0, rax at +112
-    pushq %r15
-    pushq %r14
-    pushq %r13
-    pushq %r12
-    pushq %r11
-    pushq %r10
-    pushq %r9
-    pushq %r8
-    pushq %rbp
-    pushq %rdi
-    pushq %rsi
-    pushq %rdx
-    pushq %rcx
-    pushq %rbx
-    movq 168(%rsp), %rax          # interrupted rax (rsp + 14*8 + 56)
-    pushq %rax
+    # Reserve the interrupted function's stack top: the CPU already pushed
+    # 7 slots ([SS][RSP][RFLAGS][CS][RIP] + errcode + vector) into its red
+    # zone [R0-56, R0); our frame must go BELOW the whole red zone
+    # [R0-128, R0), otherwise it clobbers the preempted function's locals
+    # (compilers only guarantee the red zone, not [R0-176, R0-128)).
+    subq $128, %rsp
+
+    # CPU-pushed 7 slots now sit at rsp+128..rsp+176:
+    #   +128 vector, +136 errcode, +144 RIP, +152 CS,
+    #   +160 RFLAGS, +168 RSP, +176 SS
+    # Rebuild them into the frame's +120..+168 (each pushq reads the next
+    # original slot because rsp drops by 8 every time):
+    pushq 176(%rsp)               # SS   (+168)
+    pushq 176(%rsp)               # RSP  (+160)
+    pushq 176(%rsp)               # RFLAGS (+152)
+    pushq 176(%rsp)               # CS   (+144)
+    pushq 176(%rsp)               # RIP  (+136)
+    pushq 176(%rsp)               # errcode (+128)
+    pushq 176(%rsp)               # vector (+120)
+
+    # Save GP regs, pushed in restore order: rax at +112 ... r15 at +0
+    pushq %rax                    # +112
+    pushq %rbx                    # +104
+    pushq %rcx                    # +96
+    pushq %rdx                    # +88
+    pushq %rsi                    # +80
+    pushq %rdi                    # +72
+    pushq %rbp                    # +64
+    pushq %r8                     # +56
+    pushq %r9                     # +48
+    pushq %r10                    # +40
+    pushq %r11                    # +32
+    pushq %r12                    # +24
+    pushq %r13                    # +16
+    pushq %r14                    # +8
+    pushq %r15                    # +0
 
     # kstack_top slot at +176
     movq g_current_kstack_top(%rip), %rax
@@ -348,10 +345,13 @@ isr_common:
 
     cld
 
-    # 诊断：临时短路 dispatch（不调用分发，直接恢复）——判定 NPE 是否来自分发路径
-    movq %rsp, %rax
-    jmp  restore_frame
-    # call kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJJ
+    # rdi = cause (vector), rsi = epc (RIP), rdx = sp, rcx = frame
+    movq %rsp, %rcx
+    movq 120(%rsp), %rdi
+    movq 136(%rsp), %rsi
+    movq %rsp, %rdx
+
+    call kr_partix_kernel_interrupt_InterruptBridge_dispatch__JJJJJ
 
     # Restore from the returned frame (same frame if no context switch)
     movq %rax, %rsp

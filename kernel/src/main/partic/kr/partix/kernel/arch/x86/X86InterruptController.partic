@@ -6,8 +6,10 @@ import kr.partix.kernel.interrupt.IInterruptHandler;
 import kr.partix.kernel.interrupt.IInterruptData;
 import kr.partix.kernel.interrupt.Interrupt;
 import kr.partix.kernel.exception.KernelNullPointerFault;
+import kr.partix.kernel.boot.BootFail;
 import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.timer.Timer;
+import kr.partix.kernel.syscall.Syscall;
 
 class X86InterruptController implements IInterruptController {
     private static final int PIC1_CMD  = 0x20;
@@ -16,6 +18,7 @@ class X86InterruptController implements IInterruptController {
     private static final int PIC2_DATA = 0xA1;
     private static final int IRQ_BASE  = 0x20;
     private static final int PF_VECTOR = 14;
+    private static final int SYSCALL_VECTOR = 0x80;
 
     private final IInterruptHandler[] handlers = new IInterruptHandler[256];
     private int pic1Mask;
@@ -93,13 +96,23 @@ class X86InterruptController implements IInterruptController {
     long dispatch(long cause, long epc, long sp, long frame) {
         int vector = (int) cause;
 
-        // NULL 页 Page Fault → TriggerNullPointerEvent（EventBus → 监听器）
+        // Page Fault：NULL 页 → NullPointer 事件；用户态其他缺页 → 杀线程；
+        // 内核态其他缺页 → 内核映射缺失，停机。
         if (vector == PF_VECTOR) {
             long cr2 = paging_read_cr2();
             if (cr2 < 4096) {
                 KernelNullPointerFault.trigger(cr2, epc, 0);
                 return 0;
             }
+            // 帧 +144 = CS：RPL 位判断 fault 发生在用户态还是内核态
+            long cs = System.read64(frame + 144);
+            if ((cs & 3) != 0) {
+                // 用户态缺页（如访问未映射用户页）→ 终止当前用户线程
+                Scheduler.sysExit(-11);
+                return Scheduler.onReschedule();
+            }
+            BootFail.fail("kernel page fault");
+            return 0;
         }
 
         if (vector == Timer.getVector()) {
@@ -107,10 +120,24 @@ class X86InterruptController implements IInterruptController {
             // notify via TimerEvent. Returns the next frame to restore.
             Timer.tick();
             long next = Scheduler.onTick();
-            // 诊断：临时去掉 EventBus 深调用，二分定位 NPE 来源
-            // Interrupt.fireTimerEvent(epc, sp);
+            Interrupt.fireTimerEvent(epc, sp);
             Timer.eoi();
             return next;
+        }
+
+        if (vector == SYSCALL_VECTOR) {
+            // 用户态 syscall（syscall_entry 构建的帧，rax=号，args 见帧槽）：
+            //   rax=+112, rdi=+72, rsi=+80, rdx=+88, r10=+40, r8=+48, r9=+56
+            long num = System.read64(frame + 112);
+            long a0 = System.read64(frame + 72);
+            long a1 = System.read64(frame + 80);
+            long a2 = System.read64(frame + 88);
+            long a3 = System.read64(frame + 40);
+            long a4 = System.read64(frame + 48);
+            long a5 = System.read64(frame + 56);
+            long ret = Syscall.dispatch((int) num, a0, a1, a2, a3, a4, a5);
+            System.write64(frame + 112, ret);
+            return Scheduler.onReschedule();
         }
 
         IInterruptHandler h = handlers[vector];

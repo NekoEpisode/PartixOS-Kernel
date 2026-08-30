@@ -40,7 +40,6 @@ class RISCVArch implements IArch {
     }
 
     void init() {
-        uart.println("[dbg] arch.init");
         // 设备树节点 → 设备注册中心
         FdtScanner.scanAndRegister();
         // PCI 控制器来自 DT（pci-host-ecam-generic 节点）：用其 reg 更新 ECAM
@@ -49,10 +48,8 @@ class RISCVArch implements IArch {
         IDevice pcie = DeviceRegistry.findByCompatible(BusType.DT, "pci-host-ecam-generic");
         if (pcie != null && pcie.getResourceCount() > 0) {
             pciIo.updateEcam(pcie.getResource(0).start);
-            uart.println("[dbg] pci ecam from DT");
         }
         ic.init();
-        uart.println("[dbg] ic.init done");
         long sbiErr = Timer.getSbiError();
         if (sbiErr != 0) {
             // SBI set_timer failed — the timer will never fire.

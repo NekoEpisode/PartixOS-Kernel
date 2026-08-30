@@ -1,11 +1,8 @@
 package kr.partix.kernel.memory;
 
-import kr.partix.kernel.main.BspKrMain;
 import kr.partix.kernel.sys.System;
 import lang.partic.stdlib.additional.collection.list.ArrayList;
 import lang.partic.stdlib.additional.collection.list.List;
-import lang.partic.stdlib.additional.utils.StrBuilder;
-import lang.partic.stdlib.additional.utils.StrUtils;
 
 class MemoryMapEntry {
     long start;
@@ -34,34 +31,6 @@ class MemoryMap {
         descSize = BootData.getDescSize();
 
         descCount = (int)(mmapSize / descSize);
-        // 诊断插桩（临时）：内存图头部信息
-        StrBuilder mb = new StrBuilder();
-        mb.append("[mmap] addr=");
-        mb.append(StrUtils.toHex(mmap));
-        mb.append(" size=");
-        mb.append(StrUtils.longToStr(mmapSize));
-        mb.append(" descSize=");
-        mb.append(StrUtils.longToStr(descSize));
-        mb.append(" count=");
-        mb.append(StrUtils.longToStr((long) descCount));
-        str mout = mb.build();
-        BspKrMain.arch.getUart().println(mout);
-        mb.dispose();
-        for (int d = 0; d < descCount && d < 6; d++) {
-            long base = mmap + (long)d * descSize;
-            StrBuilder db = new StrBuilder();
-            db.append("[mmap] d");
-            db.append(StrUtils.longToStr((long) d));
-            db.append(" type=");
-            db.append(StrUtils.longToStr((long) System.read32(base)));
-            db.append(" start=");
-            db.append(StrUtils.toHex(System.read64(base + 8)));
-            db.append(" pages=");
-            db.append(StrUtils.longToStr(System.read64(base + 24)));
-            str dout = db.build();
-            BspKrMain.arch.getUart().println(dout);
-            db.dispose();
-        }
 
         freeRanges = new ArrayList<MemoryMapEntry>();
         totalFreePages = 0;

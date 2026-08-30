@@ -2,6 +2,11 @@
 #include "include/io.h"
 #include "include/stdint.h"
 
+// Own flat GDT + TSS (replaces the UEFI one; kernel CS becomes 0x08).
+extern void init_gdt(void);
+// syscall instruction + NX enable (must run after GDT, before user mode).
+extern void init_syscall(void);
+
 uint32_t* gop_framebuffer;
 uint64_t gop_width, gop_height, gop_stride;
 uint64_t uefi_mmap_addr, uefi_mmap_size, uefi_mmap_desc_size;
@@ -35,8 +40,10 @@ void kernel_entry(BootInfo* info) {
     uefi_mmap_desc_size = info->memoryMapDescriptorSize;
 
     asm volatile("cli");
-    uint16_t cs = info->cs_selector;
-    init_idt(cs);
+    // 自己的扁平 GDT（kernel CS 0x08），再按它重载 IDT
+    init_gdt();
+    init_syscall();
+    init_idt(0x08);
     // sti deferred to Partic after all init is done
 
     extern void _start(void);

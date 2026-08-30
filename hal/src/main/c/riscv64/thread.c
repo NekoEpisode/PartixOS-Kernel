@@ -16,6 +16,11 @@ void thread_frame_set(long tid, long frame) {
     thread_frames[tid] = (uint64_t)frame;
 }
 
+// Size in bytes of the saved context frame for this architecture.
+long thread_frame_size() {
+    return 272;
+}
+
 // x86-only hook; no-op on RISC-V (sscratch carries the kernel stack top).
 void g_current_kstack_top_set(long top) {
     (void)top;

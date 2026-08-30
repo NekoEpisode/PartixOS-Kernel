@@ -6,7 +6,7 @@ package kr.partix.kernel.syscall;
  * ABI：riscv a7=号/a0~a5=参数，x86 eax=号/rdi,rsi,rdx,r10,r8,r9。
  */
 class Syscall {
-    static final int MAX_SYSCALLS = 64;
+    static final int MAX_SYSCALLS = 512;
 
     private static ISyscallHandler[] handlers;
 

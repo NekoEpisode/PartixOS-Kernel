@@ -25,6 +25,10 @@ thread_switch_frame:
     movq %rdi, %r8                # r8  = tid
     movq %rsi, %r9                # r9  = new_frame
 
+    # Reserve the caller's SysV red zone (128 bytes below its rsp) so the
+    # frame we build below does not clobber it.
+    subq $128, %rsp
+
     # ── raw 7 slots (pushed first → high end) ──
     xorq %rax, %rax
     mov  %ss, %ax
@@ -40,22 +44,22 @@ thread_switch_frame:
     pushq $0                      # errcode (+128)
     pushq $0xFE                   # vector  (+120)
 
-    # ── GP regs (r15 at +0 ... rax at +112) ──
-    pushq %r15
-    pushq %r14
-    pushq %r13
-    pushq %r12
-    pushq %r11                    # (r11 = C — harmless, caller-saved)
-    pushq %r10
-    pushq %r9                     # (r9 = new_frame — harmless)
-    pushq %r8                     # (r8 = tid — harmless)
-    pushq %rbp
-    pushq %rdi                    # (tid)
-    pushq %rsi                    # (new_frame)
-    pushq %rdx
-    pushq %rcx
-    pushq %rbx
-    pushq %rax                    # (rax = resume label — harmless)
+    # ── GP regs, pushed in restore order: rax at +112 ... r15 at +0 ──
+    pushq %rax                    # +112 (rax = resume label — harmless)
+    pushq %rbx                    # +104
+    pushq %rcx                    # +96
+    pushq %rdx                    # +88
+    pushq %rsi                    # +80 (new_frame — harmless)
+    pushq %rdi                    # +72 (tid — harmless)
+    pushq %rbp                    # +64
+    pushq %r8                     # +56 (tid — harmless)
+    pushq %r9                     # +48 (new_frame — harmless)
+    pushq %r10                    # +40
+    pushq %r11                    # +32 (r11 = C — harmless, caller-saved)
+    pushq %r12                    # +24
+    pushq %r13                    # +16
+    pushq %r14                    # +8
+    pushq %r15                    # +0
 
     # kstack_top at +176
     movq g_current_kstack_top(%rip), %rax
@@ -77,7 +81,11 @@ thread_switch_frame:
 # ── Common restore tail ─────────────────────────
 .globl restore_frame
 restore_frame:
-    # (x86 milestone: update TSS.RSP0 from 176(%rsp) here)
+    # TSS.RSP0 = frame+176 (next thread's kernel stack top), so a ring3
+    # interrupt/syscall from this thread lands on its own kernel stack.
+    # Pass the frame BASE (gdt_set_rsp0_from_frame reads frame+176 itself).
+    movq %rsp, %rdi
+    call gdt_set_rsp0_from_frame
     popq %r15
     popq %r14
     popq %r13

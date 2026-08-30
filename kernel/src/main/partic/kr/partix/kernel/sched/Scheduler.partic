@@ -7,8 +7,6 @@ import kr.partix.kernel.sys.System;
 import kr.partix.kernel.timer.Timer;
 import lang.partic.stdlib.additional.collection.list.ArrayList;
 import lang.partic.stdlib.additional.collection.list.List;
-import lang.partic.stdlib.additional.utils.StrBuilder;
-import lang.partic.stdlib.additional.utils.StrUtils;
 
 /**
  * 调度器门面：机制层（当前线程、空闲线程、切换、睡眠唤醒），
@@ -176,21 +174,6 @@ class Scheduler {
         next.state(ThreadState.RUNNING);
         next.ticksLeft(QUANTUM);
         switchAddressSpace(next);
-        // 诊断插桩（临时）：切到用户线程时打印帧信息（排查 sscratch 错值）
-        if (next.owner() != null) {
-            StrBuilder dsb = new StrBuilder();
-            dsb.append("[launch] tid=");
-            dsb.append(StrUtils.longToStr((long) next.tid()));
-            dsb.append(" savedF=");
-            dsb.append(StrUtils.toHex(next.savedFrame()));
-            dsb.append(" f33=");
-            dsb.append(StrUtils.toHex(System.read64(next.savedFrame() + 264)));
-            dsb.append(" f32=");
-            dsb.append(StrUtils.toHex(System.read64(next.savedFrame() + 256)));
-            str dout = dsb.build();
-            BspKrMain.arch.getUart().println(dout);
-            dsb.dispose();
-        }
         Threads.switchFrame(cur.tid(), next.savedFrame());
     }
 
@@ -210,21 +193,6 @@ class Scheduler {
         next.state(ThreadState.RUNNING);
         next.ticksLeft(QUANTUM);
         switchAddressSpace(next);
-        // 诊断插桩（临时）：同上
-        if (next.owner() != null) {
-            StrBuilder dsb = new StrBuilder();
-            dsb.append("[launch] tid=");
-            dsb.append(StrUtils.longToStr((long) next.tid()));
-            dsb.append(" savedF=");
-            dsb.append(StrUtils.toHex(next.savedFrame()));
-            dsb.append(" f33=");
-            dsb.append(StrUtils.toHex(System.read64(next.savedFrame() + 264)));
-            dsb.append(" f32=");
-            dsb.append(StrUtils.toHex(System.read64(next.savedFrame() + 256)));
-            str dout = dsb.build();
-            BspKrMain.arch.getUart().println(dout);
-            dsb.dispose();
-        }
         return next.savedFrame();
     }
 
@@ -236,13 +204,6 @@ class Scheduler {
         if (root != lastRoot) {
             ptm.loadRoot(root);
             lastRoot = root;
-            // 调试插桩（临时）：确认地址空间切换
-            StrBuilder asb = new StrBuilder();
-            asb.append("[as] load root=");
-            asb.append(StrUtils.toHex(root));
-            str aout = asb.build();
-            BspKrMain.arch.getUart().println(aout);
-            asb.dispose();
         }
     }
 

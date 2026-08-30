@@ -6,13 +6,9 @@ import kr.partix.kernel.interrupt.IInterruptController;
 import kr.partix.kernel.interrupt.IInterruptHandler;
 import kr.partix.kernel.interrupt.Interrupt;
 import kr.partix.kernel.exception.KernelNullPointerFault;
-import kr.partix.kernel.main.BspKrMain;
 import kr.partix.kernel.sched.Scheduler;
-import kr.partix.kernel.sched.Thread;
 import kr.partix.kernel.syscall.Syscall;
 import kr.partix.kernel.timer.Timer;
-import lang.partic.stdlib.additional.utils.StrBuilder;
-import lang.partic.stdlib.additional.utils.StrUtils;
 
 class RISCVInterruptController implements IInterruptController {
     private static long plicBase;
@@ -148,59 +144,6 @@ class RISCVInterruptController implements IInterruptController {
             long stval = paging_read_stval();
             long sstatus = System.read64(frame + FRAME_SSTATUS);
             boolean user = (sstatus & SSTATUS_SPP) == 0;
-            // 诊断插桩（临时）：异常信息 + 当前线程内核栈顶 + stval 所在页的 PTE
-            Thread cur = Scheduler.current();
-            long curKstack = 0;
-            long uroot = 0;
-            if (cur != null) {
-                curKstack = cur.kernelStackTop();
-                if (cur.owner() != null) uroot = cur.owner().addressSpace().root();
-            }
-            StrBuilder fsb = new StrBuilder();
-            fsb.append("[fault] code=");
-            fsb.append(StrUtils.longToStr(code));
-            fsb.append(" stval=");
-            fsb.append(StrUtils.toHex(stval));
-            fsb.append(" spp=");
-            fsb.append(StrUtils.longToStr((long) (user ? 0 : 1)));
-            fsb.append(" kstackTop=");
-            fsb.append(StrUtils.toHex(curKstack));
-            fsb.append(" root=");
-            fsb.append(StrUtils.toHex(uroot));
-            fsb.append(" tid=");
-            if (cur != null) {
-                fsb.append(StrUtils.longToStr((long) cur.tid()));
-                fsb.append(" savedF=");
-                fsb.append(StrUtils.toHex(cur.savedFrame()));
-            } else {
-                fsb.append("none");
-            }
-            str fout = fsb.build();
-            BspKrMain.arch.getUart().println(fout);
-            fsb.dispose();
-            if (uroot != 0) {
-                long pgdE = System.read64(uroot + (stval / 0x40000000L) * 8);
-                long pmdE = 0;
-                long pte = 0;
-                if ((pgdE & 1) != 0) {
-                    long pmdAddr = (pgdE & ~0x3FFL) << 2;
-                    pmdE = System.read64(pmdAddr + ((stval % 0x40000000L) / 0x200000L) * 8);
-                    if ((pmdE & 1) != 0 && (pmdE & (2 | 8)) == 0) {
-                        long ptAddr = (pmdE & ~0x3FFL) << 2;
-                        pte = System.read64(ptAddr + ((stval % 0x200000L) / 0x1000L) * 8);
-                    }
-                }
-                StrBuilder pteSb = new StrBuilder();
-                pteSb.append("[pte] pgd=");
-                pteSb.append(StrUtils.toHex(pgdE));
-                pteSb.append(" pmd=");
-                pteSb.append(StrUtils.toHex(pmdE));
-                pteSb.append(" pte=");
-                pteSb.append(StrUtils.toHex(pte));
-                str pteOut = pteSb.build();
-                BspKrMain.arch.getUart().println(pteOut);
-                pteSb.dispose();
-            }
             if (user) {
                 // 用户态故障：杀掉当前线程，不 panic
                 Scheduler.sysExit(-11);

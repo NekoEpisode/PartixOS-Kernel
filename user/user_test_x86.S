@@ -1,5 +1,5 @@
 # x86_64 user-mode test program (embedded, freestanding).
-# Syscall ABI: eax = number, rdi/rsi/rdx/r10/r8/r9 = args, int $0x80.
+# Syscall ABI: eax = number, rdi/rsi/rdx/r10/r8/r9 = args, via `syscall`.
 #   write(fd, buf, len) = 1, yield() = 2, sleep(ms) = 3, exit(code) = 0
 
 .code64
@@ -11,35 +11,35 @@ _start:
     mov $1, %edi
     lea msg1(%rip), %rsi
     mov $32, %edx
-    int $0x80
+    syscall
 
     # sleep(500)
     mov $3, %eax
     mov $500, %edi
-    int $0x80
+    syscall
 
     # write(1, msg2, 30)
     mov $1, %eax
     mov $1, %edi
     lea msg2(%rip), %rsi
     mov $30, %edx
-    int $0x80
+    syscall
 
     # yield()
     mov $2, %eax
-    int $0x80
+    syscall
 
     # write(1, msg3, 43)
     mov $1, %eax
     mov $1, %edi
     lea msg3(%rip), %rsi
     mov $43, %edx
-    int $0x80
+    syscall
 
     # exit(0)
     mov $0, %eax
     xor %edi, %edi
-    int $0x80
+    syscall
 
 1:  jmp 1b
 

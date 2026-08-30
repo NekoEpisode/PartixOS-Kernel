@@ -117,6 +117,10 @@ class X86PageTableManager implements IPageTableManager {
         if ((flags & PageFlags.WRITABLE) != 0) entry |= PML4E_RW;
         if ((flags & PageFlags.USER) != 0) entry |= 4;      // US 位
         if ((flags & PageFlags.NO_EXEC) != 0) entry |= PDE_NX;
+        // x86-64 的 U/S 位是逐级 AND 的：用户访问要求 PML4E/PDPTE/PDE/PTE
+        // 每一级都有 US 位（QEMU excp_helper.c ptep &= pte ^ PG_NX_MASK）。
+        // 用户页必须把路径上各级都标 US，否则任何一级 U/S=0 → #PF。
+        long pathUser = (flags & PageFlags.USER) != 0 ? 4 : 0;
 
         int pml4Index = (int)(virt / 0x8000000000L);
         int pdptIndex = (int)((virt % 0x8000000000L) / 0x40000000L);
@@ -127,18 +131,26 @@ class X86PageTableManager implements IPageTableManager {
         long pdpt;
         if ((pml4e & PML4E_PRESENT) == 0) {
             pdpt = allocZeroPage();
-            System.write64(root + (long)pml4Index * 8, pdpt | PML4E_PRESENT | PML4E_RW);
+            System.write64(root + (long)pml4Index * 8,
+                    pdpt | PML4E_PRESENT | PML4E_RW | pathUser);
         } else {
             pdpt = pml4e & 0xFFFFFFFFFFFFF000L;
+            if (pathUser != 0 && (pml4e & 4) == 0) {
+                System.write64(root + (long)pml4Index * 8, pml4e | 4);
+            }
         }
 
         long pdpte = System.read64(pdpt + (long)pdptIndex * 8);
         long pd;
         if ((pdpte & PML4E_PRESENT) == 0) {
             pd = allocZeroPage();
-            System.write64(pdpt + (long)pdptIndex * 8, pd | PML4E_PRESENT | PML4E_RW);
+            System.write64(pdpt + (long)pdptIndex * 8,
+                    pd | PML4E_PRESENT | PML4E_RW | pathUser);
         } else {
             pd = pdpte & 0xFFFFFFFFFFFFF000L;
+            if (pathUser != 0 && (pdpte & 4) == 0) {
+                System.write64(pdpt + (long)pdptIndex * 8, pdpte | 4);
+            }
         }
 
         long pde = System.read64(pd + (long)pdIndex * 8);
@@ -152,12 +164,17 @@ class X86PageTableManager implements IPageTableManager {
                 System.write64(pt + (long)i * 8,
                         (physBase + (long)i * 4096) | (baseFlags & ~PDE_PS_2MB));
             }
-            System.write64(pd + (long)pdIndex * 8, pt | PML4E_PRESENT | PML4E_RW);
+            System.write64(pd + (long)pdIndex * 8,
+                    pt | PML4E_PRESENT | PML4E_RW | pathUser);
         } else if ((pde & PML4E_PRESENT) != 0) {
             pt = pde & 0xFFFFFFFFFFFFF000L;
+            if (pathUser != 0 && (pde & 4) == 0) {
+                System.write64(pd + (long)pdIndex * 8, pde | 4);
+            }
         } else {
             pt = allocZeroPage();
-            System.write64(pd + (long)pdIndex * 8, pt | PML4E_PRESENT | PML4E_RW);
+            System.write64(pd + (long)pdIndex * 8,
+                    pt | PML4E_PRESENT | PML4E_RW | pathUser);
         }
 
         System.write64(pt + (long)ptIndex * 8, entry);

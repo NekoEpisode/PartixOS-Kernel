@@ -1,7 +1,6 @@
 package kr.partix.kernel.main;
 
 import lang.partic.stdlib.additional.utils.StrBuilder;
-import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.additional.utils.Optional;
 import lang.partic.stdlib.core.memory.Memory;
 import lang.partic.stdlib.core.exception.exception.Exception;
@@ -124,7 +123,7 @@ class BspKrMain {
         }
     }
 
-    /** RISC-V：初始化调度器，起内核测试线程 + 内嵌用户程序，然后进入调度。 */
+    /** 初始化调度器，起内核测试线程 + 内嵌用户程序，然后进入调度。 */
     private static void bootScheduler() {
         arch.getUart().println("[sched] init...");
         Scheduler.init(new RoundRobinScheduler());
@@ -136,45 +135,23 @@ class BspKrMain {
         Scheduler.add(kt2);
         arch.getUart().println("[sched] kthreads ready");
 
-        // 用户程序段：riscv 已通；x86 待 GDT/TSS/syscall（P1/P2）后放开
-        if (arch.getArchId() == 1) {
-            bootUserProgram();
-        }
+        bootUserProgram();
 
         Scheduler.start();
     }
 
     /** 加载内嵌用户程序并创建进程。 */
     private static void bootUserProgram() {
-        StrBuilder dbg = new StrBuilder();
-        dbg.append("[user] blob start=");
-        dbg.append(StrUtils.toHex(EmbeddedPrograms.testStart()));
-        dbg.append(" size=");
-        dbg.append(StrUtils.longToStr(EmbeddedPrograms.testSize()));
-        str dbgOut = dbg.build();
-        arch.getUart().println(dbgOut);
-        Memory.free(dbgOut);
-        dbg.dispose();
-
         byte[] uData = EmbeddedPrograms.loadUserTest();
         if (uData != null) {
-            arch.getUart().println("[user] data loaded");
             IProgram uProg = ProgramLoaderRegistry.load(uData);
             if (uProg != null) {
-                arch.getUart().println("[user] parse ok");
                 ProcessMetaBuilder ub = new ProcessMetaBuilder();
                 ub.name("user_test");
                 ub.program(uProg);
                 ub.data(uData);
                 ProcessMeta uMeta = ub.build();
                 Process uProc = ProcessManager.createProcess(uMeta);
-                StrBuilder pmsg = new StrBuilder();
-                pmsg.append("[user] pid=");
-                pmsg.append(StrUtils.longToStr(uProc.pid()));
-                str pout = pmsg.build();
-                arch.getUart().println(pout);
-                Memory.free(pout);
-                pmsg.dispose();
                 Memory.free((long) uMeta);
                 Memory.free((long) ub);
             } else {

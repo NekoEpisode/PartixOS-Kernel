@@ -25,6 +25,7 @@ class Thread {
 
     private extern void build_thread_frame(long frame, long entry, long arg,
                                            long savedSp, long kstackTop, long sstatus);
+    private extern long thread_frame_size();
 
     Thread(Process owner, long entry, long arg, long userEntry, long userStackTop) {
         this.owner = owner;
@@ -53,9 +54,10 @@ class Thread {
         long frameEntry;
         if (entry != 0) frameEntry = entry;
         else frameEntry = userEntry;
-        build_thread_frame(kernelStackTop - 272, frameEntry, arg, savedSp, kernelStackTop, sstatus);
+        long frameSize = thread_frame_size();
+        build_thread_frame(kernelStackTop - frameSize, frameEntry, arg, savedSp, kernelStackTop, sstatus);
         // 记录帧指针：新线程首次被调度时从该帧恢复
-        Threads.setFrame(tid, kernelStackTop - 272);
+        Threads.setFrame(tid, kernelStackTop - frameSize);
         ThreadManager.register(this);
     }
 

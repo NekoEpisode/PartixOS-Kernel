@@ -18,6 +18,11 @@ void thread_frame_set(long tid, long frame) {
     thread_frames[tid] = (uint64_t)frame;
 }
 
+// Size in bytes of the saved context frame for this architecture.
+long thread_frame_size() {
+    return 184;
+}
+
 void g_current_kstack_top_set(long top) {
     g_current_kstack_top = (uint64_t)top;
 }
@@ -58,7 +63,8 @@ void kthread_entry_stub(long arg) {
 
 void idle_entry_stub(long arg) {
     (void)arg;
-    for (;;) __asm__ volatile("cli; hlt");
+    // 空闲线程必须保持中断开启（不能 cli），否则 timer 无法唤醒睡眠线程
+    for (;;) __asm__ volatile("hlt");
 }
 
 long kthread_entry_stub_addr = (long)(void *)kthread_entry_stub;
