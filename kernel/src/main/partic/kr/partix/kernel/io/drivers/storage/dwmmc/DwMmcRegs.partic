@@ -1,0 +1,97 @@
+package kr.partix.kernel.io.drivers.storage.dwmmc;
+
+/**
+ * dw_mmc（DesignWare MMC）主机控制器寄存器定义。
+ * 规范来源：Docs/JH7110_DWMMC.md §2/§3，源自 starfive-u-boot include/dwmmc.h。
+ */
+class DwMmcRegs {
+    /* 寄存器偏移 */
+    static final int CTRL        = 0x000;
+    static final int PWREN       = 0x004;
+    static final int CLKDIV      = 0x008;
+    static final int CLKSRC      = 0x00C;
+    static final int CLKENA      = 0x010;
+    static final int TMOUT       = 0x014;
+    static final int CTYPE       = 0x018;
+    static final int BLKSIZ      = 0x01C;
+    static final int BYTCNT      = 0x020;
+    static final int INTMASK     = 0x024;
+    static final int CMDARG      = 0x028;
+    static final int CMD         = 0x02C;
+    static final int RESP0       = 0x030;
+    static final int RESP1       = 0x034;
+    static final int RESP2       = 0x038;
+    static final int RESP3       = 0x03C;
+    static final int MINTSTS     = 0x040;
+    static final int RINTSTS     = 0x044;
+    static final int STATUS      = 0x048;
+    static final int FIFOTH      = 0x04C;
+    static final int CDETECT     = 0x050;
+    static final int WRTPRT      = 0x054;
+    static final int VERID       = 0x06C;
+    static final int HCON        = 0x070;
+    static final int UHS_REG     = 0x074;
+    static final int BMOD        = 0x080;
+    static final int DATA        = 0x200;
+
+    /* CTRL 位 */
+    static final int CTRL_RESET       = 1 << 0;
+    static final int CTRL_FIFO_RESET  = 1 << 1;
+    static final int CTRL_DMA_RESET   = 1 << 2;
+    static final int CTRL_DMA_EN      = 1 << 5;
+    static final int CTRL_IDMAC_EN    = 1 << 25;
+    static final int CTRL_RESET_ALL   = CTRL_RESET | CTRL_FIFO_RESET | CTRL_DMA_RESET;
+
+    /* CMD 位 */
+    static final int CMD_RESP_EXP     = 1 << 6;
+    static final int CMD_RESP_LENGTH  = 1 << 7;   /* R2 长响应 */
+    static final int CMD_CHECK_CRC    = 1 << 8;
+    static final int CMD_DATA_EXP     = 1 << 9;
+    static final int CMD_RW           = 1 << 10;  /* 写命令 */
+    static final int CMD_SEND_STOP    = 1 << 12;
+    static final int CMD_PRV_DAT_WAIT = 1 << 13;
+    static final int CMD_ABORT_STOP   = 1 << 14;  /* CMD12 */
+    static final int CMD_SEND_INIT    = 1 << 15;  /* 首条 CMD0 必须置 */
+    static final int CMD_UPD_CLK      = 1 << 21;
+    static final int CMD_USE_HOLD_REG = 1 << 29;
+    static final int CMD_START        = 1 << 31;
+
+    /* RINTSTS / MINTSTS / INTMASK 中断位 */
+    static final int INT_RE     = 1 << 1;   /* 响应错误 */
+    static final int INT_CDONE  = 1 << 2;   /* 命令完成 */
+    static final int INT_DTO    = 1 << 3;   /* 数据传输完成 */
+    static final int INT_TXDR   = 1 << 4;   /* TX 数据请求 */
+    static final int INT_RXDR   = 1 << 5;   /* RX 数据请求 */
+    static final int INT_RCRC   = 1 << 6;
+    static final int INT_DCRC   = 1 << 7;
+    static final int INT_RTO    = 1 << 8;   /* 响应超时 */
+    static final int INT_DRTO   = 1 << 9;
+    static final int INT_HTO    = 1 << 10;
+    static final int INT_FRUN   = 1 << 11;
+    static final int INT_HLE    = 1 << 12;
+    static final int INT_SBE    = 1 << 13;
+    static final int INT_EBE    = 1 << 15;
+
+    /* STATUS 位 */
+    static final int STATUS_FIFO_EMPTY = 1 << 2;
+    static final int STATUS_FIFO_FULL  = 1 << 3;
+    static final int STATUS_BUSY       = 1 << 9;
+    static final int STATUS_FIFO_SHIFT = 17;
+    static final int STATUS_FIFO_MASK  = 0x1FFF;
+
+    /* CLKENA 位 */
+    static final int CLKEN_ENABLE  = 1 << 0;
+    static final int CLKEN_LOW_PWR = 1 << 16;
+
+    /* CTYPE */
+    static final int CTYPE_1BIT = 0;
+    static final int CTYPE_4BIT = 1 << 0;
+    static final int CTYPE_8BIT = 1 << 16;
+
+    /* 错误位组合 */
+    static final int INT_CMD_ERROR  = INT_RE | INT_RTO | INT_RCRC;
+    static final int INT_DATA_ERROR = INT_EBE | INT_SBE | INT_HLE | INT_FRUN
+            | INT_DCRC | INT_HTO | INT_DRTO;
+    /** 写 1 清全部中断（-1 = 0xFFFFFFFF） */
+    static final int INT_ALL_CLEAR = -1;
+}

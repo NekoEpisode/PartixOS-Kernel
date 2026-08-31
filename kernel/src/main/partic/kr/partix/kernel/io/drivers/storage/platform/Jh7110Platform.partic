@@ -1,0 +1,43 @@
+package kr.partix.kernel.io.drivers.storage.platform;
+
+import kr.partix.kernel.sys.System;
+
+/**
+ * JH7110 板级平台数据（StarFive JH7110 / Milk-V Mars / VisionFive 2）。
+ *
+ * 设计原则：板级数据全部集中在这里，控制器实现（DwMmcImpl）不认识任何板子。
+ * 时钟门控在 SoC 层（clkgen），U-Boot 启动时已配好（实测 0x13020170=0x80000000、
+ * 0x13020178=0x80000002），这里只做幂等确认，不重配 div。
+ */
+class Jh7110Platform {
+    /** sdio1（TF 卡）控制器基址 */
+    static final long SDIO1_BASE = 0x16020000L;
+    /** sdio1 寄存器块大小 */
+    static final long SDIO1_SIZE = 0x10000L;
+
+    /* clkgen "sys" 基址 0x13020000 + SYS_OFFSET(id) = id * 4 */
+    static final long SYS_CLKGEN = 0x13020000L;
+    /** JH7110_SDIO1_CLK_AHB (id 92) —— gate，bit31 使能 */
+    static final long SDIO1_CLK_AHB = SYS_CLKGEN + 92L * 4L;
+    /** JH7110_SDIO1_CLK_SDCARD (id 94) —— composite，bit31 使能，div [23:0] one-based */
+    static final long SDIO1_CLK_SDCARD = SYS_CLKGEN + 94L * 4L;
+
+    static final int CLK_GATE = 1 << 31;
+
+    /** sdio1 卡时钟频率（dts assigned-clock-rates，U-Boot 实测 div=2 → 50MHz） */
+    static final int SDIO1_SDCARD_HZ = 50000000;
+
+    /** sdio1 FIFO 深度（dts fifo-depth，单位：32 位字 → 实际 128 字节） */
+    static final int SDIO1_FIFO_DEPTH_WORDS = 32;
+
+    /**
+     * 幂等使能 SDIO1 两个时钟：读→或 bit31→写回。
+     * div 保持 U-Boot 配好的值（0x2 → 50MHz）不动。
+     */
+    static void enableClock() {
+        System.write32(SDIO1_CLK_AHB,
+                System.read32(SDIO1_CLK_AHB) | CLK_GATE);
+        System.write32(SDIO1_CLK_SDCARD,
+                System.read32(SDIO1_CLK_SDCARD) | CLK_GATE);
+    }
+}

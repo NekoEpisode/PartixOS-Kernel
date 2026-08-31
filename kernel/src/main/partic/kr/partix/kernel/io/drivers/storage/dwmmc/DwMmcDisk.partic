@@ -1,0 +1,31 @@
+package kr.partix.kernel.io.drivers.storage.dwmmc;
+
+import kr.partix.kernel.io.disk.IDisk;
+
+/**
+ * DW MMC 上的 SD 卡逻辑盘。扇区大小 512 字节。
+ * byte[] 数据区物理地址 = (long)buf + 16（数组对象头偏移）。
+ */
+class DwMmcDisk implements IDisk {
+    private final DwMmcImpl host;
+    private final str name;
+
+    DwMmcDisk(DwMmcImpl host, str name) {
+        this.host = host;
+        this.name = name;
+    }
+
+    public int readSectors(long lba, int count, byte[] buf) {
+        return host.readBlocks(lba, count, (long) buf + 16);
+    }
+
+    public int writeSectors(long lba, int count, byte[] buf) {
+        return host.writeBlocks(lba, count, (long) buf + 16);
+    }
+
+    public long getSectorCount() -> host.getSectorCount()
+
+    public int getSectorSize() -> 512
+
+    public str getName() -> name
+}

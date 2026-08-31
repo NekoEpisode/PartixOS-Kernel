@@ -1,0 +1,28 @@
+package kr.partix.kernel.io.drivers.storage.dwmmc;
+
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.timer.Timer;
+
+/**
+ * dw_mmc 等待辅助：tick 粒度轮询 + 可配超时，返回是否成功（超时=false）。
+ * 规范：Docs/JH7110_DWMMC.md §7。
+ */
+class DwMmcWait {
+    /** 等 (read32(addr) & mask) == 0。 */
+    static boolean untilClear(long addr, int mask, long ticks) {
+        long deadline = Timer.getTicks() + ticks;
+        while (Timer.getTicks() < deadline) {
+            if ((System.read32(addr) & mask) == 0) return true;
+        }
+        return false;
+    }
+
+    /** 等 (read32(addr) & mask) != 0。 */
+    static boolean untilSet(long addr, int mask, long ticks) {
+        long deadline = Timer.getTicks() + ticks;
+        while (Timer.getTicks() < deadline) {
+            if ((System.read32(addr) & mask) != 0) return true;
+        }
+        return false;
+    }
+}

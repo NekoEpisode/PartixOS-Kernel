@@ -1,0 +1,708 @@
+package kr.partix.kernel.io.drivers.storage.dwmmc;
+
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.io.drivers.storage.platform.Jh7110Platform;
+import kr.partix.kernel.log.StartupLogger;
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.timer.Timer;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * DW MMC 主机控制器（snps,dw-mshc）驱动核心。
+ *
+ * 职责：控制器复位与时钟、SD 卡初始化序列（识别/容量/总线宽度/时序）、
+ * PIO 数据通路（任意长度读 + 块读写）。实现 `IDisk` 所需能力，由
+ * DwMmcDisk 适配为逻辑盘。
+ *
+ * 规范来源：starfive-u-boot drivers/mmc/dw_mmc.c
+ * 只认识 dw_mmc 寄存器；板级数据（基址/时钟/FIFO 深度）在 Jh7110Platform (或其他实现类)。
+ */
+class DwMmcImpl {
+    /* 响应类型 */
+    static final int RT_NONE = 0;
+    static final int RT_SHORT = 1;   /* R1/R3/R6/R7，48 位 */
+    static final int RT_LONG = 2;    /* R2，136 位 */
+
+    /* sendCommand 返回值 */
+    static final int CMD_OK = 0;
+    static final int CMD_ERR_TIMEOUT = -1;  /* CDONE 未到 */
+    static final int CMD_ERR_RTO = -2;      /* 响应超时（CMD55 对 eMMC 属预期） */
+    static final int CMD_ERR_RE = -3;       /* 响应错误 */
+    static final int CMD_ERR_RCRC = -4;     /* 响应 CRC 错 */
+    static final int CMD_ERR_DAT = -5;      /* 数据阶段错误（EBE/SBE/HLE/FRUN/DCRC/HTO/DRTO） */
+
+    private static final int BLOCK = 512;
+    private static final int BLOCK_WORDS = BLOCK / 4;
+
+    private final long base;
+    private boolean ok;
+    private final int[] resp = new int[4];
+
+    /* 卡状态（initCard 填充） */
+    private int rca;
+    private long sectorCount;
+    private boolean highCapacity;
+    private int scr0;
+
+    DwMmcImpl(IDevice dev) {
+        long addr = 0;
+        if (dev.getResourceCount() > 0) {
+            addr = dev.getResource(0).start;
+        }
+        base = addr;
+        if (base == 0) return;
+
+        Jh7110Platform.enableClock();
+        System.write32(base + DwMmcRegs.PWREN, 1);   // 卡电源使能（U-Boot dwmci_init 第一步，缺失会数据阶段异常）
+        reset();
+        probe();
+        initCard();
+        readTest();
+        writeTest();
+    }
+
+    long getBase() -> base
+
+    boolean isOk() -> ok
+
+    boolean isCardReady() -> sectorCount > 0
+
+    long getSectorCount() -> sectorCount
+
+    /**
+     * 软复位：CTRL=RESET_ALL，轮询等自清。
+     * 必须先清 U-Boot 固件残留状态（AHCI 同款教训），再关闭中断屏蔽。
+     */
+    private void reset() {
+        System.write32(base + DwMmcRegs.CTRL, DwMmcRegs.CTRL_RESET_ALL);
+        if (DwMmcWait.untilClear(base + DwMmcRegs.CTRL, DwMmcRegs.CTRL_RESET_ALL, Timer.TICK_HZ)) {
+            ok = true;
+        } else {
+            StartupLogger.warn("dwmmc: reset timeout");
+        }
+        System.write32(base + DwMmcRegs.INTMASK, 0);
+    }
+
+    /**
+     * 切换 SD 卡时钟频率（控制器内部分频，SoC 级时钟在 Jh7110Platform）。
+     * div = ceil(sclk / (2*freq))，sclk 与 freq 相等时 bypass。
+     */
+    boolean setClock(int freq) {
+        if (freq <= 0) return false;
+        int div;
+        if (freq >= Jh7110Platform.SDIO1_SDCARD_HZ) {
+            div = 0;   /* bypass */
+        } else {
+            div = (Jh7110Platform.SDIO1_SDCARD_HZ + 2 * freq - 1) / (2 * freq);
+        }
+
+        System.write32(base + DwMmcRegs.CLKENA, 0);
+        System.write32(base + DwMmcRegs.CLKSRC, 0);
+        System.write32(base + DwMmcRegs.CLKDIV, div);
+
+        System.write32(base + DwMmcRegs.CMD, DwMmcRegs.CMD_UPD_CLK
+                | DwMmcRegs.CMD_PRV_DAT_WAIT | DwMmcRegs.CMD_START);
+        if (!DwMmcWait.untilClear(base + DwMmcRegs.CMD, DwMmcRegs.CMD_START, Timer.TICK_HZ / 10)) {
+            return false;
+        }
+
+        System.write32(base + DwMmcRegs.CLKENA, DwMmcRegs.CLKEN_ENABLE | DwMmcRegs.CLKEN_LOW_PWR);
+        System.write32(base + DwMmcRegs.CMD, DwMmcRegs.CMD_UPD_CLK
+                | DwMmcRegs.CMD_PRV_DAT_WAIT | DwMmcRegs.CMD_START);
+        if (!DwMmcWait.untilClear(base + DwMmcRegs.CMD, DwMmcRegs.CMD_START, Timer.TICK_HZ / 10)) {
+            return false;
+        }
+        return true;
+    }
+
+    /**
+     * 发送一条命令并等待完成。
+     * @param cmd     命令号
+     * @param arg     命令参数（截断为 32 位）
+     * @param respType RT_NONE / RT_SHORT / RT_LONG
+     * @param crc     是否检查响应 CRC
+     * @param sendInit 是否带 SEND_INIT（首条 CMD0 必须）
+     * @return CMD_OK 或负错误码；响应写入 resp[0..3]
+     */
+    int sendCommand(int cmd, long arg, int respType, boolean crc, boolean sendInit) {
+        if (!DwMmcWait.untilClear(base + DwMmcRegs.STATUS, DwMmcRegs.STATUS_BUSY, Timer.TICK_HZ)) {
+            return CMD_ERR_TIMEOUT;
+        }
+        System.write32(base + DwMmcRegs.RINTSTS, DwMmcRegs.INT_ALL_CLEAR);
+        System.write32(base + DwMmcRegs.CMDARG, (int) arg);
+
+        int flags = cmd | DwMmcRegs.CMD_START | DwMmcRegs.CMD_USE_HOLD_REG
+                | DwMmcRegs.CMD_PRV_DAT_WAIT;
+        if (respType == RT_LONG) {
+            flags |= DwMmcRegs.CMD_RESP_EXP | DwMmcRegs.CMD_RESP_LENGTH;
+        } else if (respType == RT_SHORT) {
+            flags |= DwMmcRegs.CMD_RESP_EXP;
+        }
+        if (crc) flags |= DwMmcRegs.CMD_CHECK_CRC;
+        if (sendInit) flags |= DwMmcRegs.CMD_SEND_INIT;
+
+        System.write32(base + DwMmcRegs.CMD, flags);
+
+        if (!DwMmcWait.untilSet(base + DwMmcRegs.RINTSTS, DwMmcRegs.INT_CDONE, Timer.TICK_HZ / 10)) {
+            return CMD_ERR_TIMEOUT;
+        }
+
+        int mask = System.read32(base + DwMmcRegs.RINTSTS);
+        if ((mask & DwMmcRegs.INT_RTO) != 0) return CMD_ERR_RTO;
+        if ((mask & DwMmcRegs.INT_RE) != 0) return CMD_ERR_RE;
+        if (crc && (mask & DwMmcRegs.INT_RCRC) != 0) return CMD_ERR_RCRC;
+
+        if (respType == RT_LONG) {
+            resp[0] = System.read32(base + DwMmcRegs.RESP3);
+            resp[1] = System.read32(base + DwMmcRegs.RESP2);
+            resp[2] = System.read32(base + DwMmcRegs.RESP1);
+            resp[3] = System.read32(base + DwMmcRegs.RESP0);
+        } else if (respType == RT_SHORT) {
+            resp[0] = System.read32(base + DwMmcRegs.RESP0);
+        }
+        return CMD_OK;
+    }
+
+    /**
+     * SD 卡初始化序列：CMD0 → CMD8 → CMD55+ACMD41（等 ready）→ CMD2 → CMD3（RCA）
+     * → CMD9（CSD）→ CMD7（select）→ CMD16（块长 512）→ 总线宽度/时序/时钟配置。
+     * 规范：Docs/JH7110_DWMMC.md §8。
+     */
+    private void initCard() {
+        if (!ok) return;
+        if (!setClock(400000)) {
+            StartupLogger.warn("dwmmc: setClock 400K failed");
+            return;
+        }
+
+        if (!cmdOk("cmd0", sendCommand(0, 0, RT_NONE, false, true))) return;
+        if (!cmdOk("cmd8", sendCommand(8, 0x1AA, RT_SHORT, true, false))) return;
+
+        StrBuilder sb = new StrBuilder();
+        sb.append("dwmmc: cmd8 resp=");
+        appendHex(sb, resp[0]);
+        sb.append(" (SD v2)");
+        log(sb);
+
+        // ACMD41 握手：CMD55 + ACMD41(0x40FF8000)，等 OCR ready 位（bit31）
+        long deadline = Timer.getTicks() + 2 * Timer.TICK_HZ;
+        boolean ready = false;
+        while (Timer.getTicks() < deadline) {
+            if (!cmdOk("cmd55", sendCommand(55, 0, RT_SHORT, false, false))) return;
+            if (!cmdOk("acmd41", sendCommand(41, 0x40FF8000L, RT_SHORT, false, false))) return;
+            if ((resp[0] & 0x80000000) != 0) {
+                highCapacity = (resp[0] & 0x40000000) != 0;   /* OCR CCS 位 */
+                ready = true;
+                break;
+            }
+        }
+        if (!ready) {
+            StartupLogger.warn("dwmmc: acmd41 timeout (card not ready)");
+            return;
+        }
+
+        if (!cmdOk("cmd2", sendCommand(2, 0, RT_LONG, false, false))) return;
+        if (!cmdOk("cmd3", sendCommand(3, 0, RT_SHORT, false, false))) return;
+        rca = (resp[0] >>> 16) & 0xFFFF;
+        if (rca == 0) {
+            StartupLogger.warn("dwmmc: cmd3 rca=0");
+            return;
+        }
+
+        if (!cmdOk("cmd9", sendCommand(9, (long) rca << 16, RT_LONG, false, false))) return;
+        parseCsd();
+        if (sectorCount == 0) {
+            StartupLogger.warn("dwmmc: csd parse failed");
+            return;
+        }
+
+        if (!cmdOk("cmd7", sendCommand(7, (long) rca << 16, RT_SHORT, false, false))) return;
+        if (!cmdOk("cmd16", sendCommand(16, 512, RT_SHORT, false, false))) return;
+
+        // FIFOTH：MSIZE(2) | RX_WMARK(fifo_depth/2 - 1) | TX_WMARK(fifo_depth/2)
+        int fd = Jh7110Platform.SDIO1_FIFO_DEPTH_WORDS;
+        System.write32(base + DwMmcRegs.FIFOTH,
+                (2 << 28) | ((fd / 2 - 1) << 16) | (fd / 2));
+
+        // TMOUT：响应/数据超时计数（U-Boot dwmci_init 标准步骤，缺失会 RTO）
+        System.write32(base + DwMmcRegs.TMOUT, -1);
+
+        // 总线宽度对齐 1-bit：卡（ACMD6 arg=0）+ 控制器（CTYPE=1BIT）。
+        // 卡可能遗留 U-Boot 的 4-bit 状态（CMD0 不重置卡的总线宽度配置），
+        // 而控制器复位后是 1-bit——宽度不匹配会让数据阶段报 SBE（实测 mask=0x2004）。
+        // 先显式对齐 1-bit，后续按 SCR 支持位决定是否升级 4-bit。
+        if (!cmdOk("cmd55", sendCommand(55, 0, RT_SHORT, false, false))) return;
+        if (!cmdOk("acmd6", sendCommand(6, 0, RT_SHORT, false, false))) return;
+        System.write32(base + DwMmcRegs.CTYPE, DwMmcRegs.CTYPE_1BIT);
+
+        // SCR → 4-bit 支持判定（SD_DATA_4BIT，U-Boot 位定义）；CMD6 → HS 时序
+        if (readScr()) {
+            boolean wide4 = (scr0 & 0x00040000) != 0;
+            if (wide4) {
+                if (!cmdOk("cmd55", sendCommand(55, (long) rca << 16, RT_SHORT, false, false))) return;
+                if (!cmdOk("acmd6", sendCommand(6, 2, RT_SHORT, false, false))) return;
+                System.write32(base + DwMmcRegs.CTYPE, DwMmcRegs.CTYPE_4BIT);
+                logInfo("dwmmc: bus width 4-bit");
+            }
+        }
+        // TODO(50MHz): 目前固定 25MHz（div=1，实际 SDCLK = ciu/2，读写验证已通）。
+        //   50MHz 需 div=0 bypass，但 bypass 后 RTO（实测）——疑似 SDIO1_SDCARD_HZ
+        //   基准常量错误：ciu 实际可能为 100MHz（U-Boot clkgen div=2 且父时钟 axi_cfg0
+        //   未确认），50MHz 需 div=1 而非 bypass。等高精度计时（rdtime）接入后
+        //   读回 CLKDIV 反推 ciu 真实频率再修。
+        switchHighSpeed();
+        if (!setClock(25000000)) {
+            StartupLogger.warn("dwmmc: clock up failed");
+        }
+
+        logCardInfo();
+    }
+
+    /** 读 SCR（CMD55+ACMD51，8 字节），记录 scr0（前 4 字节大端→小端）。 */
+    private boolean readScr() {
+        long buf = Memory.malloc(8);
+        if (buf == 0) return false;
+        if (!cmdOk("cmd55", sendCommand(55, (long) rca << 16, RT_SHORT, false, false))) {
+            Memory.free(buf);
+            return false;
+        }
+        int r = readData(51, 0, 8, buf);
+        if (r != CMD_OK) {
+            logInfo("dwmmc: acmd51 failed");
+            Memory.free(buf);
+            return false;
+        }
+        scr0 = be32At(buf, 0);
+        Memory.free(buf);
+        return true;
+    }
+
+    /**
+     * CMD6 切 HS（arg=0x80FFFFF1，读 64 字节 switch status）。
+     * 先 check（0x00FFFFF1）确认卡支持 HS（switch_status[3] & 0x20000），再 switch。
+     * switch 后卡有 busy 期，等 READY_FOR_DATA 再继续。
+     */
+    private boolean switchHighSpeed() {
+        long buf = Memory.malloc(64);
+        if (buf == 0) return false;
+        int r = readData(6, 0x00FFFFF1L, 64, buf);
+        if (r != CMD_OK) {
+            logInfo("dwmmc: cmd6 check failed");
+            Memory.free(buf);
+            return false;
+        }
+        int st3 = be32At(buf, 12);   /* switch_status[3] */
+        if ((st3 & 0x00020000) == 0) {   /* SD_HIGHSPEED_SUPPORTED */
+            logInfo("dwmmc: card does not support HS");
+            Memory.free(buf);
+            return false;
+        }
+        r = readData(6, 0x80FFFFF1L, 64, buf);
+        if (r != CMD_OK) {
+            logInfo("dwmmc: cmd6 switch failed");
+            Memory.free(buf);
+            return false;
+        }
+        logInfo("dwmmc: high speed enabled");
+        Memory.free(buf);
+        return waitCardReady();
+    }
+
+    /** CMD13 轮询卡状态，直到 READY_FOR_DATA（R1 bit8）。 */
+    private boolean waitCardReady() {
+        long deadline = Timer.getTicks() + Timer.TICK_HZ;
+        while (Timer.getTicks() < deadline) {
+            if (!cmdOk("cmd13", sendCommand(13, (long) rca << 16, RT_SHORT, false, false))) {
+                return false;
+            }
+            if ((resp[0] & 0x100) != 0) return true;
+        }
+        logInfo("dwmmc: card busy timeout");
+        return false;
+    }
+
+    /** 读 4 字节大端（SD 响应/SCR/switch status 均为大端传输）。 */
+    private static int be32At(long buf, int off) {
+        int b0 = (int) System.read8(buf + (long) off) & 0xFF;
+        int b1 = (int) System.read8(buf + (long) off + 1) & 0xFF;
+        int b2 = (int) System.read8(buf + (long) off + 2) & 0xFF;
+        int b3 = (int) System.read8(buf + (long) off + 3) & 0xFF;
+        return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+    }
+
+    private void logInfo(str msg) {
+        StartupLogger.info(msg);
+        Memory.free(msg);
+    }
+
+    /** 读验证：以配置好的时钟/总线宽度读扇区 0，与 U-Boot mmc read 交叉验证。 */
+    private void readTest() {
+        if (!isCardReady()) return;
+        long buf = Memory.malloc(BLOCK);
+        if (buf == 0) return;
+        int r = readBlocks(0, 1, buf);
+        printSector("read@25m", buf, r);
+        Memory.free(buf);
+    }
+
+    /**
+     * 写验证（安全）：用卡尾部扇区（远离系统数据）写回读，最后恢复原值。
+     * 步骤：读原值 → 写已知模式 0x11223344 → 读回比对 → 写回原值。
+     */
+    private void writeTest() {
+        if (!isCardReady()) return;
+        long lba = sectorCount - 1;
+        long buf = Memory.malloc(BLOCK);
+        long orig = Memory.malloc(BLOCK);
+        if (buf == 0 || orig == 0) {
+            if (buf != 0) Memory.free(buf);
+            if (orig != 0) Memory.free(orig);
+            return;
+        }
+
+        if (readBlocks(lba, 1, orig) != 1) {
+            logInfo("dwmmc: writetest read-orig failed");
+            Memory.free(buf);
+            Memory.free(orig);
+            return;
+        }
+        for (int i = 0; i < BLOCK_WORDS; i++) {
+            System.write32(buf + (long) i * 4, 0x11223344);
+        }
+        int w = writeBlocks(lba, 1, buf);
+        if (w != 1) {
+            logInfo("dwmmc: writetest write failed");
+            writeBlocks(lba, 1, orig);   // 尽力恢复
+            Memory.free(buf);
+            Memory.free(orig);
+            return;
+        }
+        int r = readBlocks(lba, 1, buf);
+        if (r != 1) {
+            logInfo("dwmmc: writetest readback failed");
+            writeBlocks(lba, 1, orig);
+            Memory.free(buf);
+            Memory.free(orig);
+            return;
+        }
+        boolean ok = true;
+        for (int i = 0; i < BLOCK_WORDS; i++) {
+            if (System.read32(buf + (long) i * 4) != 0x11223344) {
+                ok = false;
+                break;
+            }
+        }
+        writeBlocks(lba, 1, orig);   // 恢复原值
+        Memory.free(buf);
+        Memory.free(orig);
+        logInfo(ok ? "dwmmc: writetest OK (tail sector)" : "dwmmc: writetest MISMATCH (tail sector)");
+    }
+
+    private void printSector(str tag, long buf, int r) {
+        if (r != 1) {
+            StrBuilder sb = new StrBuilder();
+            sb.append("dwmmc: ");
+            sb.append(tag);
+            sb.append(" failed err=");
+            sb.append(StrUtils.toDec(r));
+            log(sb);
+            return;
+        }
+        StrBuilder sb = new StrBuilder();
+        sb.append("dwmmc: ");
+        sb.append(tag);
+        sb.append(" sector0: ");
+        for (int i = 0; i < 16; i++) {
+            appendHex(sb, (int) System.read8(buf + (long) i) & 0xFF);
+            sb.append(" ");
+        }
+        int sig = ((int) System.read8(buf + 510) & 0xFF)
+                | (((int) System.read8(buf + 511) & 0xFF) << 8);
+        sb.append("sig=");
+        appendHex(sb, sig);
+        sb.append(sig == 0xAA55 ? " OK" : " (no mbr sig)");
+        log(sb);
+    }
+
+    /** 发送命令；失败时打印命令名与错误码并返回 false。 */
+    private boolean cmdOk(str name, int r) {
+        if (r == CMD_OK) return true;
+        logCmdResult(name, r);
+        return false;
+    }
+
+    private void logCmdResult(str name, int err) {
+        StrBuilder sb = new StrBuilder();
+        sb.append("dwmmc: ");
+        sb.append(name);
+        sb.append(" failed err=");
+        sb.append(StrUtils.toDec(err));
+        log(sb);
+    }
+
+    /** 数据阶段错误明细：打印 RINTSTS 中置位的错误位。 */
+    private void logDataError(str dir, int mask) {
+        StrBuilder sb = new StrBuilder();
+        sb.append("dwmmc: data err [");
+        sb.append(dir);
+        sb.append("] mask=");
+        appendHex(sb, mask);
+        if ((mask & DwMmcRegs.INT_EBE) != 0) sb.append(" EBE");
+        if ((mask & DwMmcRegs.INT_SBE) != 0) sb.append(" SBE");
+        if ((mask & DwMmcRegs.INT_HLE) != 0) sb.append(" HLE");
+        if ((mask & DwMmcRegs.INT_FRUN) != 0) sb.append(" FRUN");
+        if ((mask & DwMmcRegs.INT_DCRC) != 0) sb.append(" DCRC");
+        if ((mask & DwMmcRegs.INT_HTO) != 0) sb.append(" HTO");
+        if ((mask & DwMmcRegs.INT_DRTO) != 0) sb.append(" DRTO");
+        log(sb);
+    }
+
+    /**
+     * CSD 解析（R2 响应存于 resp[0..3] = RESP3..RESP0，CSD 最高位在 resp[0] bit31）。
+     * v1（SDSC）：容量 = (C_SIZE+1) << (C_SIZE_MULT+2) 个 512B 块
+     * v2（SDHC）：容量 = (C_SIZE+1) * 512KiB → 扇区数 (C_SIZE+1) << 10
+     */
+    private void parseCsd() {
+        int struct = (resp[0] >>> 30) & 0x3;   /* CSD[127:126] */
+        if (struct == 0) {
+            int csize = ((resp[1] & 0x3FF) << 2) | ((resp[2] >>> 30) & 0x3);
+            int cmult = (resp[2] >>> 15) & 0x7;
+            sectorCount = ((long) csize + 1) << (cmult + 2);
+            highCapacity = false;
+        } else if (struct == 1) {
+            int csize = ((resp[1] & 0x3F) << 16) | ((resp[2] >>> 16) & 0xFFFF);
+            sectorCount = ((long) csize + 1) << 10;
+            highCapacity = true;
+        } else {
+            sectorCount = 0;
+        }
+    }
+
+    private void logCardInfo() {
+        StrBuilder sb = new StrBuilder();
+        sb.append("dwmmc: card rca=");
+        appendHex(sb, rca);
+        sb.append(" ");
+        sb.append(highCapacity ? "SDHC" : "SDSC");
+        sb.append(" sectors=");
+        sb.append(StrUtils.longToStr(sectorCount));
+        sb.append(" ctype=");
+        int ctype = System.read32(base + DwMmcRegs.CTYPE);
+        sb.append((ctype & DwMmcRegs.CTYPE_4BIT) != 0 ? "4bit" : "1bit");
+        sb.append(" clkdiv=");
+        appendHex(sb, System.read32(base + DwMmcRegs.CLKDIV));
+        log(sb);
+    }
+
+    /**
+     * 块读写入口（IDisk 使用）。buf 为数据区物理地址（byte[] 已 +16）。
+     * 当前实现：逐块单块命令（CMD17/CMD24），多块优化后续再做。
+     * 返回成功块数或负错误码。
+     */
+    int readBlocks(long lba, int count, long buf) {
+        if (!isCardReady()) return -1;
+        if (count <= 0) return 0;
+        if (lba < 0 || lba + count > sectorCount) return -2;
+        for (int i = 0; i < count; i++) {
+            int r = readBlock(lba + (long) i, buf + (long) i * BLOCK);
+            if (r != CMD_OK) return r;
+        }
+        return count;
+    }
+
+    int writeBlocks(long lba, int count, long buf) {
+        if (!isCardReady()) return -1;
+        if (count <= 0) return 0;
+        if (lba < 0 || lba + count > sectorCount) return -2;
+        for (int i = 0; i < count; i++) {
+            int r = writeBlock(lba + (long) i, buf + (long) i * BLOCK);
+            if (r != CMD_OK) return r;
+        }
+        return count;
+    }
+
+    /** PIO 读一块：readData(17, lba, 512, buf)。 */
+    private int readBlock(long lba, long buf) {
+        return readData(17, lba, BLOCK, buf);
+    }
+
+    /**
+     * PIO 数据读：发带数据命令（CMD17/CMD6/ACMD51 等）并读 len 字节到 buf。
+     * len 必须为 4 的倍数（8=SCR / 64=switch status / 512=块）。
+     */
+    private int readData(int cmd, long arg, int len, long buf) {
+        System.write32(base + DwMmcRegs.BLKSIZ, len);
+        System.write32(base + DwMmcRegs.BYTCNT, len);
+        System.write32(base + DwMmcRegs.CTRL, DwMmcRegs.CTRL_FIFO_RESET);
+        if (!DwMmcWait.untilClear(base + DwMmcRegs.CTRL, DwMmcRegs.CTRL_FIFO_RESET, Timer.TICK_HZ / 10)) {
+            return CMD_ERR_TIMEOUT;
+        }
+
+        int r = sendDataCommand(cmd, arg, false);
+        if (r != CMD_OK) return r;
+
+        int words = len / 4;
+        int done = 0;
+        long deadline = Timer.getTicks() + Timer.TICK_HZ;
+        while (Timer.getTicks() < deadline) {
+            int mask = System.read32(base + DwMmcRegs.RINTSTS);
+            if ((mask & DwMmcRegs.INT_DATA_ERROR) != 0) {
+                logDataError("read", mask);
+                return CMD_ERR_DAT;
+            }
+
+            if ((mask & DwMmcRegs.INT_RXDR) != 0) {
+                System.write32(base + DwMmcRegs.RINTSTS, DwMmcRegs.INT_RXDR);
+                while (done < words) {
+                    int st = System.read32(base + DwMmcRegs.STATUS);
+                    if ((st & DwMmcRegs.STATUS_FIFO_EMPTY) != 0) break;
+                    int avail = (st >>> DwMmcRegs.STATUS_FIFO_SHIFT) & DwMmcRegs.STATUS_FIFO_MASK;
+                    if (avail <= 0) break;
+                    int n = words - done;
+                    if (n > avail) n = avail;
+                    for (int i = 0; i < n; i++) {
+                        System.write32(buf + (long) (done + i) * 4,
+                                System.read32(base + DwMmcRegs.DATA));
+                    }
+                    done += n;
+                }
+            }
+
+            if ((mask & DwMmcRegs.INT_DTO) != 0) {
+                // 数据完成：FIFO 若有剩余（理论上 DTO 前已空），读完收尾
+                while (done < words
+                        && (System.read32(base + DwMmcRegs.STATUS) & DwMmcRegs.STATUS_FIFO_EMPTY) == 0) {
+                    System.write32(buf + (long) done * 4, System.read32(base + DwMmcRegs.DATA));
+                    done += 1;
+                }
+                return done >= words ? CMD_OK : CMD_ERR_DAT;
+            }
+        }
+        return CMD_ERR_TIMEOUT;
+    }
+
+    /** PIO 写一块：CMD24 + DATA 端口轮询。 */
+    private int writeBlock(long lba, long buf) {
+        System.write32(base + DwMmcRegs.BLKSIZ, BLOCK);
+        System.write32(base + DwMmcRegs.BYTCNT, BLOCK);
+        System.write32(base + DwMmcRegs.CTRL, DwMmcRegs.CTRL_FIFO_RESET);
+        if (!DwMmcWait.untilClear(base + DwMmcRegs.CTRL, DwMmcRegs.CTRL_FIFO_RESET, Timer.TICK_HZ / 10)) {
+            return CMD_ERR_TIMEOUT;
+        }
+
+        int r = sendDataCommand(24, lba, true);
+        if (r != CMD_OK) return r;
+
+        int done = 0;
+        long deadline = Timer.getTicks() + Timer.TICK_HZ;
+        while (Timer.getTicks() < deadline) {
+            int mask = System.read32(base + DwMmcRegs.RINTSTS);
+            if ((mask & DwMmcRegs.INT_DATA_ERROR) != 0) {
+                logDataError("write", mask);
+                return CMD_ERR_DAT;
+            }
+
+            if ((mask & DwMmcRegs.INT_TXDR) != 0) {
+                System.write32(base + DwMmcRegs.RINTSTS, DwMmcRegs.INT_TXDR);
+                while (done < BLOCK_WORDS) {
+                    int st = System.read32(base + DwMmcRegs.STATUS);
+                    if ((st & DwMmcRegs.STATUS_FIFO_FULL) != 0) break;
+                    int used = (st >>> DwMmcRegs.STATUS_FIFO_SHIFT) & DwMmcRegs.STATUS_FIFO_MASK;
+                    int space = Jh7110Platform.SDIO1_FIFO_DEPTH_WORDS - used;
+                    if (space <= 0) break;
+                    int n = BLOCK_WORDS - done;
+                    if (n > space) n = space;
+                    for (int i = 0; i < n; i++) {
+                        System.write32(base + DwMmcRegs.DATA,
+                                System.read32(buf + (long) (done + i) * 4));
+                    }
+                    done += n;
+                }
+            }
+
+            if ((mask & DwMmcRegs.INT_DTO) != 0) {
+                return done >= BLOCK_WORDS ? CMD_OK : CMD_ERR_DAT;
+            }
+        }
+        return CMD_ERR_TIMEOUT;
+    }
+
+    /** 带数据传输的命令（CMD17/18/24/25 类）。 */
+    private int sendDataCommand(int cmd, long arg, boolean write) {
+        if (!DwMmcWait.untilClear(base + DwMmcRegs.STATUS, DwMmcRegs.STATUS_BUSY, Timer.TICK_HZ)) {
+            return CMD_ERR_TIMEOUT;
+        }
+        System.write32(base + DwMmcRegs.RINTSTS, DwMmcRegs.INT_ALL_CLEAR);
+        System.write32(base + DwMmcRegs.CMDARG, (int) arg);
+
+        int flags = cmd | DwMmcRegs.CMD_START | DwMmcRegs.CMD_USE_HOLD_REG
+                | DwMmcRegs.CMD_PRV_DAT_WAIT | DwMmcRegs.CMD_DATA_EXP
+                | DwMmcRegs.CMD_RESP_EXP | DwMmcRegs.CMD_CHECK_CRC;
+        if (write) flags |= DwMmcRegs.CMD_RW;
+
+        System.write32(base + DwMmcRegs.CMD, flags);
+
+        if (!DwMmcWait.untilSet(base + DwMmcRegs.RINTSTS, DwMmcRegs.INT_CDONE, Timer.TICK_HZ / 10)) {
+            return CMD_ERR_TIMEOUT;
+        }
+        int mask = System.read32(base + DwMmcRegs.RINTSTS);
+        if ((mask & DwMmcRegs.INT_RTO) != 0) return CMD_ERR_RTO;
+        if ((mask & DwMmcRegs.INT_RE) != 0) return CMD_ERR_RE;
+        if ((mask & DwMmcRegs.INT_RCRC) != 0) return CMD_ERR_RCRC;
+        resp[0] = System.read32(base + DwMmcRegs.RESP0);
+        return CMD_OK;
+    }
+
+    /** 探针：打印控制器身份/状态寄存器，与 U-Boot `md` 输出对照。 */
+    private void probe() {
+        StrBuilder sb = new StrBuilder();
+
+        sb.append("dwmmc: base=");
+        appendHex(sb, base);
+        sb.append(" VERID=");
+        appendHex(sb, System.read32(base + DwMmcRegs.VERID));
+        sb.append(" HCON=");
+        appendHex(sb, System.read32(base + DwMmcRegs.HCON));
+        log(sb);
+
+        sb = new StrBuilder();
+        sb.append("dwmmc: CTRL=");
+        appendHex(sb, System.read32(base + DwMmcRegs.CTRL));
+        sb.append(" STATUS=");
+        appendHex(sb, System.read32(base + DwMmcRegs.STATUS));
+        int cdet = System.read32(base + DwMmcRegs.CDETECT);
+        sb.append(" CDETECT=");
+        appendHex(sb, cdet);
+        sb.append(" card=");
+        sb.append((cdet & 1) == 0 ? "present" : "absent");
+        log(sb);
+
+        sb = new StrBuilder();
+        sb.append("dwmmc: clk AHB=");
+        appendHex(sb, System.read32(Jh7110Platform.SDIO1_CLK_AHB));
+        sb.append(" SDCARD=");
+        appendHex(sb, System.read32(Jh7110Platform.SDIO1_CLK_SDCARD));
+        log(sb);
+    }
+
+    private static void appendHex(StrBuilder sb, int v) {
+        str h = StrUtils.toHex((long) v & 0xFFFFFFFFL);
+        sb.append(h);
+        Memory.free(h);
+    }
+
+    private static void appendHex(StrBuilder sb, long v) {
+        str h = StrUtils.toHex(v);
+        sb.append(h);
+        Memory.free(h);
+    }
+
+    private static void log(StrBuilder sb) {
+        str msg = sb.build();
+        StartupLogger.info(msg);
+        Memory.free(msg);
+        sb.dispose();
+    }
+}

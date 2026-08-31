@@ -1,0 +1,53 @@
+package kr.partix.kernel.io.drivers.storage.dwmmc;
+
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.io.disk.IDisk;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.drivers.storage.IDiskDriver;
+import lang.partic.stdlib.additional.utils.StrUtils;
+
+/**
+ * DW MMC SD 控制器驱动（设备树 compatible "snps,dw-mshc"）。
+ * 模板按 compatible 匹配；实例持有控制器并在卡就绪时产出逻辑盘。
+ */
+class DwMmcDriverTemplate implements IDiskDriver {
+    int getType() -> DriverType.STORAGE
+
+    str description() -> "DW MMC (snps,dw-mshc) SD controller"
+
+    boolean match(IDevice d) {
+        if (d.getBusType() != BusType.DT) return false;
+        str c = d.getCompatible();
+        if (c == null) return false;
+        return StrUtils.equals(c, "snps,dw-mshc");
+    }
+
+    IDriver create(IDevice d) -> new DwMmcDriver(d)
+
+    IDisk[] getDisks() -> new IDisk[0]
+}
+
+class DwMmcDriver implements IDiskDriver {
+    private final DwMmcImpl host;
+    private IDisk[] disks;
+
+    DwMmcDriver(IDevice d) {
+        host = new DwMmcImpl(d);
+        if (host.isCardReady()) {
+            disks = new IDisk[1];
+            disks[0] = new DwMmcDisk(host, "sd");
+        } else {
+            disks = new IDisk[0];
+        }
+    }
+
+    int getType() -> DriverType.STORAGE
+    boolean match(IDevice d) -> false
+    IDriver create(IDevice d) -> this
+
+    str description() -> "DW MMC (snps,dw-mshc) SD controller"
+
+    IDisk[] getDisks() -> disks
+}
