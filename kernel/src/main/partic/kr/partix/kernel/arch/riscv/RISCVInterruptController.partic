@@ -7,8 +7,13 @@ import kr.partix.kernel.interrupt.IInterruptHandler;
 import kr.partix.kernel.interrupt.Interrupt;
 import kr.partix.kernel.exception.KernelNullPointerFault;
 import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
 import kr.partix.kernel.syscall.Syscall;
 import kr.partix.kernel.timer.Timer;
+import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
 
 class RISCVInterruptController implements IInterruptController {
     private static long plicBase;
@@ -150,6 +155,26 @@ class RISCVInterruptController implements IInterruptController {
             boolean user = (sstatus & SSTATUS_SPP) == 0;
             if (user) {
                 // 用户态故障：杀掉当前线程，不 panic
+                // 诊断输出：异常码 + 故障地址 + 进程/线程 + 三级 PTE
+                Thread cur = Scheduler.current();
+                StrBuilder sb = new StrBuilder();
+                sb.append("[fault] user exc=");
+                str sc = StrUtils.longToStr(code);
+                sb.append(sc);
+                Memory.free(sc);
+                sb.append(" stval=0x");
+                sb.append(StrUtils.toHex(stval));
+                sb.append(" epc=0x");
+                sb.append(StrUtils.toHex(epc));
+                if (cur != null && cur.owner() != null) {
+                    sb.append(" proc=");
+                    sb.append(cur.owner().name());
+                }
+                str msg = sb.build();
+                BspKrMain.arch.getUart().println(msg);
+                Memory.free(msg);
+                sb.dispose();
+                dumpPte(stval, cur);
                 Scheduler.sysExit(-11);
                 return Scheduler.onReschedule();
             }
@@ -180,6 +205,47 @@ class RISCVInterruptController implements IInterruptController {
         if (on) val |= (1 << bit);
         else    val &= ~(1 << bit);
         System.write32(plicBase + offset, val);
+    }
+
+    /** 调试：按 stval 解出 pgd/pmd/pte 三级项打印，定位用户页表断点。 */
+    private static void dumpPte(long stval, Thread cur) {
+        if (cur == null || cur.owner() == null) return;
+        long root = cur.owner().addressSpace().root();
+        int pgdI = (int) (stval / 0x40000000L);
+        int pmdI = (int) ((stval % 0x40000000L) / 0x200000L);
+        int pteI = (int) ((stval % 0x200000L) / 0x1000L);
+
+        long pgdE = System.read64(root + (long) pgdI * 8);
+        long pmd = (pgdE & ~0x3FFL) << 2;
+        long pmdE = System.read64(pmd + (long) pmdI * 8);
+        long pt = (pmdE & ~0x3FFL) << 2;
+        long pteE = System.read64(pt + (long) pteI * 8);
+
+        StrBuilder sb = new StrBuilder();
+        sb.append("  pte pgd[");
+        str a = StrUtils.toDec(pgdI);
+        sb.append(a);
+        Memory.free(a);
+        sb.append("]=");
+        sb.append(StrUtils.toHex(pgdE));
+        sb.append(" pmd[");
+        str b = StrUtils.toDec(pmdI);
+        sb.append(b);
+        Memory.free(b);
+        sb.append("]=");
+        sb.append(StrUtils.toHex(pmdE));
+        sb.append(" pt=0x");
+        sb.append(StrUtils.toHex(pt));
+        sb.append(" pte[");
+        str c = StrUtils.toDec(pteI);
+        sb.append(c);
+        Memory.free(c);
+        sb.append("]=");
+        sb.append(StrUtils.toHex(pteE));
+        str msg = sb.build();
+        BspKrMain.arch.getUart().println(msg);
+        Memory.free(msg);
+        sb.dispose();
     }
 
     private static void writePriority(long src, int prio) {

@@ -4,6 +4,7 @@ import kr.partix.kernel.fs.fat32.Fat32;
 import kr.partix.kernel.fs.vfs.DEntry;
 import kr.partix.kernel.fs.vfs.FileMode;
 import kr.partix.kernel.fs.vfs.INode;
+import kr.partix.kernel.fs.vfs.MountTable;
 import kr.partix.kernel.fs.vfs.VFS;
 import kr.partix.kernel.io.disk.DiskRegistry;
 import kr.partix.kernel.io.disk.IDisk;
@@ -16,72 +17,130 @@ import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.core.memory.Memory;
 
+/**
+ * 文件系统初始化：遍历所有盘的所有分区，按 FAT32 卷标匹配挂载点
+ * （类似 Linux fstab，label → 挂载路径）：
+ *   ESP  → /     （引导分区兼作根：KERNEL.ELF 在根上）
+ *   DATA → /data （数据分区）
+ * /bin 不是挂载点——用户程序放在根分区的 bin/ 真实目录里（VFS 树形解析）。
+ * 无卷标匹配的 FAT32 分区跳过并打日志。
+ */
 class FSInit {
     static void init() {
         if (DiskRegistry.getCount() == 0) {
             StartupLogger.warn("no disk available, filesystem skipped");
             return;
         }
+        mountByLabel();
+        listMount("/");
+        listMount("/bin");
+        listMount("/data");
+        verifyKernel();
+    }
 
-        // 第一块盘挂载到 /（系统盘：KERNEL.ELF 等）
-        IDisk rootDisk = resolveDisk(0);
-        if (rootDisk == null) {
-            StartupLogger.error("no usable disk 0, filesystem skipped");
-            return;
-        }
-        Fat32 fat = new Fat32(rootDisk);
-        if (!fat.isValid()) {
-            StartupLogger.error("no FAT32 filesystem on disk 0");
-            return;
-        }
-        VFS.mount("/", rootDisk, fat);
-        StartupLogger.info("filesystem: FAT32 mounted at /");
+    /** 遍历所有盘的所有分区，识别 FAT32 并按卷标挂载。 */
+    private static void mountByLabel() {
+        int disks = DiskRegistry.getCount();
+        for (int i = 0; i < disks; i++) {
+            IDisk raw = DiskRegistry.get(i);
+            if (raw == null) continue;
 
-        DEntry[] entries = VFS.ls("/");
+            PartitionDisk[] parts = PartitionDisk.findAll(raw);
+            if (parts == null) {
+                // 无 GPT：回退整盘尝试（旧 superfloppy 镜像）
+                tryMount(raw, raw);
+                continue;
+            }
+            for (int j = 0; j < parts.length; j++) {
+                if (parts[j] == null) continue;
+                if (!tryMount(raw, parts[j])) {
+                    // 挂载失败（非 FAT32 / 无匹配挂载点）：分区视图不再被引用，释放
+                    Memory.free((long) parts[j]);
+                }
+            }
+            Memory.free((long) parts);
+        }
+    }
+
+    /** 尝试把 view（整盘或分区）作为 FAT32 挂载；返回是否成功。 */
+    private static boolean tryMount(IDisk raw, IDisk view) {
+        Fat32 fat = new Fat32(view);
+        if (!fat.isValid()) return false;
+        str label = fat.getVolumeLabel();
+        str path = mountPathFor(label);
+        if (path == null && !isMounted("/")) {
+            // 兜底：卷标未匹配（NO NAME/空/工具只写根目录条目等）时，
+            // 第一个 FAT32 分区直接作根。免疫卷标问题；已挂过 / 则跳过。
+            path = "/";
+        }
+        if (path == null) {
+            StrBuilder sb = new StrBuilder();
+            sb.append("filesystem: skip FAT32 (label=");
+            sb.append(label);
+            sb.append(", no mount path)");
+            log(sb);
+            Memory.free(label);
+            return false;
+        }
+        int rc = VFS.mount(path, view, fat);
+        if (rc == 0) {
+            StrBuilder sb = new StrBuilder();
+            sb.append("filesystem: FAT32 mounted at ");
+            sb.append(path);
+            sb.append(" (label ");
+            sb.append(label);
+            sb.append(")");
+            log(sb);
+            Memory.free(label);
+            return true;
+        }
+        // 挂载点已占用（重复 label）等情况
+        StrBuilder sb = new StrBuilder();
+        sb.append("filesystem: mount ");
+        sb.append(path);
+        sb.append(" failed rc=");
+        sb.append(StrUtils.toDec(rc));
+        log(sb);
+        Memory.free(label);
+        return false;
+    }
+
+    /** 检查挂载点是否已挂载。 */
+    private static boolean isMounted(str path) {
+        int n = MountTable.getCount();
+        for (int i = 0; i < n; i++) {
+            if (StrUtils.equals(MountTable.getMountPath(i), path)) return true;
+        }
+        return false;
+    }
+
+    /** FAT32 卷标 → 挂载路径（fstab 语义）。 */
+    private static str mountPathFor(str label) {
+        if (StrUtils.equals(label, "ESP")) return "/";
+        if (StrUtils.equals(label, "DATA")) return "/data";
+        return null;
+    }
+
+    /** 打印挂载点内容（未挂载则静默）。 */
+    private static void listMount(str path) {
+        DEntry[] entries = VFS.ls(path);
+        if (entries == null) return;
         for (int i = 0; i < entries.length; i++) {
             DEntry e = entries[i];
             if (e == null) continue;
             StrBuilder sb = new StrBuilder();
-            sb.append("  /");
+            sb.append("  ");
+            sb.append(path);
+            sb.append("/");
             sb.append(e.name);
             if (e.inode != null && e.inode.isDir()) sb.append("/");
-            str msg = sb.build();
-            StartupLogger.info(msg);
-            Memory.free(msg);
-            sb.dispose();
+            log(sb);
         }
+        Memory.free((long) entries);
+    }
 
-        // 第二块盘挂载到 /bin（用户程序盘：init/psh 等，AHCI 多端口枚举）
-        if (DiskRegistry.getCount() >= 2) {
-            IDisk userDisk = resolveDisk(1);
-            if (userDisk == null) {
-                StartupLogger.warn("disk 1 not usable, /bin skipped");
-            } else {
-                Fat32 userFat = new Fat32(userDisk);
-                if (!userFat.isValid()) {
-                    StartupLogger.error("no FAT32 filesystem on disk 1, /bin skipped");
-                } else if (VFS.mount("/bin", userDisk, userFat) != 0) {
-                    StartupLogger.error("mount /bin failed");
-                } else {
-                    StartupLogger.info("filesystem: FAT32 mounted at /bin (user programs)");
-                    DEntry[] binEntries = VFS.ls("/bin");
-                    for (int i = 0; i < binEntries.length; i++) {
-                        DEntry e = binEntries[i];
-                        if (e == null) continue;
-                        StrBuilder sb = new StrBuilder();
-                        sb.append("  /bin/");
-                        sb.append(e.name);
-                        str msg = sb.build();
-                        StartupLogger.info(msg);
-                        Memory.free(msg);
-                        sb.dispose();
-                    }
-                }
-            }
-        } else {
-            StartupLogger.warn("single disk only, /bin skipped (user programs need disk 1)");
-        }
-
+    /** 读 /KERNEL.ELF 验证文件系统读取 + ELF 解析器。 */
+    private static void verifyKernel() {
         int fd = VFS.open("/KERNEL.ELF", FileMode.READ);
         if (fd > 0) {
             byte[] hdr = new byte[16];
@@ -97,10 +156,7 @@ class FSInit {
                 sb.append(h);
                 Memory.free(h);
             }
-            str msg = sb.build();
-            StartupLogger.info(msg);
-            Memory.free(msg);
-            sb.dispose();
+            log(sb);
             Memory.free((long) hdr);
             VFS.close(fd);
 
@@ -108,16 +164,6 @@ class FSInit {
         } else {
             StartupLogger.error("open /KERNEL.ELF failed");
         }
-    }
-
-    /** 取第 index 块盘的可挂载视图：GPT 第一个分区；无分区表回退整盘（旧 superfloppy 镜像）。 */
-    private static IDisk resolveDisk(int index) {
-        if (index < 0 || index >= DiskRegistry.getCount()) return null;
-        IDisk raw = DiskRegistry.get(index);
-        if (raw == null) return null;
-        IDisk part = PartitionDisk.findFirst(raw);
-        if (part == null) part = raw;
-        return part;
     }
 
     /** 读整个 KERNEL.ELF 用 ELFLoader 解析，验证解析器（临时验证代码）。 */
@@ -166,10 +212,7 @@ class FSInit {
         sb.append(StrUtils.longToStr(elf.getSegments().length));
         sb.append(" sections=");
         sb.append(StrUtils.longToStr(elf.getSections().length));
-        str m = sb.build();
-        StartupLogger.info(m);
-        Memory.free(m);
-        sb.dispose();
+        log(sb);
 
         ELFSegment[] segs = elf.getSegments();
         for (int i = 0; i < segs.length; i++) {
@@ -185,10 +228,7 @@ class FSInit {
             s2.append(StrUtils.longToStr(segs[i].memsz));
             s2.append(" flags=");
             s2.append(StrUtils.longToStr(segs[i].flags));
-            str m2 = s2.build();
-            StartupLogger.info(m2);
-            Memory.free(m2);
-            s2.dispose();
+            log(s2);
         }
 
         ELFSection text = elf.findSection(".text");
@@ -198,14 +238,18 @@ class FSInit {
             s3.append(StrUtils.toHex(text.addr));
             s3.append(" size=");
             s3.append(StrUtils.longToStr(text.size));
-            str m3 = s3.build();
-            StartupLogger.info(m3);
-            Memory.free(m3);
-            s3.dispose();
+            log(s3);
         } else {
             StartupLogger.warn("elf verify: .text not found");
         }
 
         Memory.free((long) fbuf);
+    }
+
+    private static void log(StrBuilder sb) {
+        str msg = sb.build();
+        StartupLogger.info(msg);
+        Memory.free(msg);
+        sb.dispose();
     }
 }

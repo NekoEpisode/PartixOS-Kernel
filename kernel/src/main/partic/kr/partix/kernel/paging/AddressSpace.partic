@@ -17,9 +17,20 @@ class AddressSpace {
     /** 用户栈顶（两架构统一虚拟地址）。 */
     static final long USER_STACK_TOP = 0x7FFFE000L;
 
-    /** 用户态 framebuffer 映射基址（避开程序基址 0x400000 与用户栈 0x7FFFC000）。 */
-    static final long USER_FB_BASE = 0x10000000L;
-    /** 每屏预留 16MB 跨度，足以容纳 3MB framebuffer。 */
+    /**
+     * 用户态 framebuffer 映射基址（避开程序基址 0x400000、args 0x08000000
+     * 与用户栈 0x7FFFC000）。
+     *
+     * 注意：不能落在内核恒等映射会访问的 MMIO 窗口上。旧值 0x10000000 恰是
+     * JH7110 UART0（serial@10000000）所在的 2MB 大页——内核写串口控制台会在
+     * TLB 里缓存 U=0 的恒等大页项，用户态写 framebuffer 命中陈旧项 → 误报
+     * store page fault（scause 15，见 RISCVPageTableManager 的 TLB flush 注释）。
+     * 0x50000000 位于纯 DRAM 区间，无内核 MMIO 访问；其对应物理页已在
+     * PageAllocator 中 carve 保留，防止内核 heap 扩展取到同址物理页后经当前
+     * 进程页表写坏 fb 映射（与 0x400000 用户程序保留区同源问题）。
+     */
+    static final long USER_FB_BASE = 0x50000000L;
+    /** 每屏预留 16MB 跨度，足以容纳 1080p×32bpp framebuffer（≈8.3MB）。 */
     static final long FB_REGION_SIZE = 0x1000000L;
     static final int MAX_SCREENS = 8;
 
@@ -105,13 +116,18 @@ class AddressSpace {
         if (fbMapped[screenId]) return USER_FB_BASE + (long) screenId * FB_REGION_SIZE;
 
         long base = USER_FB_BASE + (long) screenId * FB_REGION_SIZE;
-        long pages = (fbSize + 4095L) / 4096L;
+        // GOP framebuffer 物理地址可能非页对齐（U-Boot 给的地址）
+        // 逐页映射会丢失页内偏移 导致用户写的 fb[0] 落到 framebuffer 起点之前
+        // 处理：映射对齐页 返回时把页内偏移加回用户地址
+        long alignedPhys = fbPhys & ~4095L;
+        long pageOff = fbPhys & 4095L;
+        long pages = (pageOff + fbSize + 4095L) / 4096L;
         for (long i = 0; i < pages; i += 1L) {
-            ptm.map4k(root, base + i * 4096L, fbPhys + i * 4096L,
+            ptm.map4k(root, base + i * 4096L, alignedPhys + i * 4096L,
                       PageFlags.USER | PageFlags.WRITABLE | PageFlags.NO_EXEC);
         }
         fbMapped[screenId] = true;
-        return base;
+        return base + pageOff;
     }
 
     /**

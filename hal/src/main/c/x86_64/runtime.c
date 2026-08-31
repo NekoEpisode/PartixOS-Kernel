@@ -86,3 +86,15 @@ unsigned long sys_now(void) {
 
 unsigned int sys_arch_protect(void) { return 0; }
 void sys_arch_unprotect(unsigned int lev) { (void)lev; }
+
+// GOP 直映 framebuffer 写后需回写 cache（clflush 按 64B cache line）。
+// QEMU 无真实 cache 时 clflush 是安全 no-op。
+void cache_clean_range(uint64_t addr, uint64_t size) {
+    if (size == 0) return;
+    uint64_t end = addr + size;
+    uint64_t a = addr & ~(uint64_t)63;
+    for (; a < end; a += 64) {
+        __asm__ volatile("clflush (%0)" :: "r"(a) : "memory");
+    }
+    __asm__ volatile("mfence" ::: "memory");
+}

@@ -5,9 +5,12 @@ import lang.partic.stdlib.core.memory.Memory;
 
 /**
  * 磁盘分区视图：把父盘的一个区间包装成独立 IDisk。
- * 用于 GPT/MBR 分区挂载——文件系统看到的是从 0 开始的"子盘"。
+ * 用于 GPT 分区挂载——文件系统看到的是从 0 开始的"子盘"。
  */
 class PartitionDisk implements IDisk {
+    private static final int ENTRY_SIZE = 128;
+    private static final int GPT_MAX_ENTRIES = 128;
+
     private final IDisk parent;
     private final long startLba;
     private final long count;
@@ -19,10 +22,11 @@ class PartitionDisk implements IDisk {
     }
 
     /**
-     * 解析 GPT，返回第一个非空分区；没有 GPT/分区时返回 null。
-     * 只查第一个分区条目——当前镜像单分区。
+     * 解析 GPT，返回所有非空分区（满数组，空位为 null）。
+     * 无 GPT 头/无可读分区时返回 null。扇区 0 的 MBR 保护签名（55AA）不检查——
+     * GPT 有效性以扇区 1 的头 magic 为准。
      */
-    static PartitionDisk findFirst(IDisk raw) {
+    static PartitionDisk[] findAll(IDisk raw) {
         byte[] buf = new byte[512];
         if (raw.readSectors(1L, 1, buf) != 1) { Memory.free((long) buf); return null; }
         // GPT 头 magic: "EFI PART"
@@ -36,20 +40,34 @@ class PartitionDisk implements IDisk {
         int count = readU32(buf, 80);      // NumberOfPartitionEntries
         int entrySize = readU32(buf, 84);  // SizeOfPartitionEntry
         Memory.free((long) buf);
-        if (count <= 0 || entrySize < 128) return null;
+        if (count <= 0 || count > GPT_MAX_ENTRIES || entrySize < ENTRY_SIZE) return null;
+
+        PartitionDisk[] result = new PartitionDisk[count];
+        int perSec = 512 / entrySize;
+        if (perSec <= 0) return result;
 
         byte[] entry = new byte[512];
-        if (raw.readSectors(partLba, 1, entry) != 1) { Memory.free((long) entry); return null; }
-        boolean empty = true;
-        for (int i = 0; i < 128; i++) {
-            if (entry[i] != (byte) 0) { empty = false; break; }
+        long curLba = -1;
+        for (int i = 0; i < count; i++) {
+            long entryLba = partLba + (long) i / perSec;
+            if (entryLba != curLba) {
+                if (raw.readSectors(entryLba, 1, entry) != 1) break;
+                curLba = entryLba;
+            }
+            int off = (i % perSec) * entrySize;
+            // 空条目：type GUID（前 16 字节）全 0
+            boolean empty = true;
+            for (int j = 0; j < 16; j++) {
+                if (entry[off + j] != (byte) 0) { empty = false; break; }
+            }
+            if (empty) continue;
+            long start = readU64(entry, off + 32);
+            long end = readU64(entry, off + 40);
+            if (end < start) continue;
+            result[i] = new PartitionDisk(raw, start, end - start + 1L);
         }
-        if (empty) { Memory.free((long) entry); return null; }
-        long start = readU64(entry, 32);
-        long end = readU64(entry, 40);
         Memory.free((long) entry);
-        if (end < start) return null;
-        return new PartitionDisk(raw, start, end - start + 1L);
+        return result;
     }
 
     private static int readU32(byte[] b, int off) {

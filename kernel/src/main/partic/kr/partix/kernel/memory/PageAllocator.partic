@@ -78,6 +78,12 @@ class PageAllocator {
         // 虚拟地址共享同一空间。未来上非恒等映射后，内核 heap 不再占用用户可见
         // 虚拟地址，此保留区可移除，改由内核虚拟内存布局统一规划。
         count = carve(segs, count, 0x400000, 0x1000000);
+        // framebuffer 用户映射区（AddressSpace.USER_FB_BASE 起，跨
+        // MAX_SCREENS×FB_REGION_SIZE = 8×16MB）：与上方 0x400000 保留区同源问题——
+        // 该用户 VA 对应物理页若被内核 heap 扩展分配，内核在该 VA 写（经当前进程
+        // 页表，恒等映射 VA==PA）会命中 fb 页表项 → 数据写进显存/内核崩溃。
+        // 改动 USER_FB_BASE / MAX_SCREENS / FB_REGION_SIZE 时需同步此区间。
+        count = carve(segs, count, 0x50000000, 0x58000000);
         if (count <= 0) {
             BspKrMain.arch.getUart().println("[page allocator] no free memory after carve");
             return;
@@ -99,6 +105,7 @@ class PageAllocator {
         page_alloc_reserve(kr_stack_bottom, kr_stack_top - kr_stack_bottom);
         page_alloc_reserve(0, 4096);
         page_alloc_reserve(0x400000, 0x1000000 - 0x400000);
+        page_alloc_reserve(0x50000000, 0x8000000);   // framebuffer 用户映射区（见上方 carve 注释）
         inited = true;
 
         long total = page_alloc_total_pages();

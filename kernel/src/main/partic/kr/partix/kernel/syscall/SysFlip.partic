@@ -2,6 +2,11 @@ package kr.partix.kernel.syscall;
 
 import kr.partix.kernel.io.screen.IScreen;
 import kr.partix.kernel.io.screen.ScreenRegistry;
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
 
 /**
  * flip(screenId, x, y, w, h)：刷新指定屏幕区域
@@ -16,6 +21,26 @@ class SysFlip implements ISyscallHandler {
         IScreen screen = ScreenRegistry.getScreen(id);
         if (screen == null) return -1;
         screen.flush(a1, a2, a3, a4);
+
+        // 调试：读回 framebuffer 前 8 像素，验证用户态写入是否到达物理内存
+        // （GOP 直映：读到新值=写入生效；读到旧值=写入没到物理内存）
+        if (screen.getFramebuffer() != null) {
+            int* fb = screen.getFramebuffer();
+            StrBuilder sb = new StrBuilder();
+            sb.append("[flip] fb@");
+            sb.append(StrUtils.toHex((long) fb));
+            sb.append(": ");
+            for (int i = 0; i < 8 && i < 4; i++) {
+                str h = StrUtils.toHex((long) System.read32((long) fb + (long) i * 4));
+                sb.append(h);
+                Memory.free(h);
+                sb.append(" ");
+            }
+            str msg = sb.build();
+            BspKrMain.arch.getUart().println(msg);
+            Memory.free(msg);
+            sb.dispose();
+        }
         return 0;
     }
 }

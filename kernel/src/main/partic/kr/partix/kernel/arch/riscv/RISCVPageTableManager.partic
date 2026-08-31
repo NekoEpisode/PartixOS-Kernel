@@ -8,6 +8,12 @@ import kr.partix.kernel.paging.PageFlags;
 
 class RISCVPageTableManager implements IPageTableManager {
     private extern void paging_load_satp(long satp);
+    private extern void paging_flush_tlb();
+
+    // UEFI GOP framebuffer（C 侧全局变量，hal/riscv64/kernel_entry.c）
+    private extern long gop_framebuffer;
+    private extern long gop_stride;
+    private extern long gop_height;
 
     private static final long PTE_V = 1;
     private static final long PTE_R = 2;
@@ -41,6 +47,10 @@ class RISCVPageTableManager implements IPageTableManager {
     private void buildIdentityMap() {
         long maxPhys = findMaxPhys();
         if (maxPhys == 0) return;
+        // GOP framebuffer 可能位于 DRAM 之外的显存窗口（如 JH7110 0xFE000000）
+        // 内核恒等映射必须覆盖它，否则用户态映射 framebuffer 后访问 #PF
+        long fbEnd = gopFbEnd();
+        if (fbEnd > maxPhys) maxPhys = fbEnd;
         if (maxPhys < 0x8000000000L) maxPhys = 0x8000000000L;
 
         int pmdCount = (int)((maxPhys + 0x3FFFFFFF) / 0x40000000);
@@ -62,6 +72,16 @@ class RISCVPageTableManager implements IPageTableManager {
         }
     }
 
+    /** GOP framebuffer 物理地址上限（gop_framebuffer + size）；无 GOP 返回 0。 */
+    private static long gopFbEnd() {
+        long fb = gop_framebuffer;
+        if (fb == 0) return 0;
+        long stride = gop_stride;
+        long h = gop_height;
+        if (stride == 0 || h == 0) return fb + 0x100000;  // 保守 1MB
+        return fb + stride * h;
+    }
+
     void map(long virt, long phys, long size, int flags) {
         long entry = (phys >> 2);
         entry |= PTE_V | PTE_A | PTE_D;
@@ -75,6 +95,9 @@ class RISCVPageTableManager implements IPageTableManager {
         long pgdEntry = System.read64(pgd + (long)pmdIndex * 8);
         long pmd = (pgdEntry & ~0x3FF) << 2;
         System.write64(pmd + (long)mbIndex * 8, entry);
+        // 页表修改后必须刷 TLB：否则用户态访问可能命中陈旧翻译（如恒等映射
+        // 的 2MB U=0 大页项）→ 误报 store page fault（scause 15）
+        paging_flush_tlb();
     }
 
     void load() {
@@ -140,6 +163,8 @@ class RISCVPageTableManager implements IPageTableManager {
         }
 
         System.write64(pteTable + (long)pteIndex * 8, entry);
+        // 见 map()：PTE 写入后必须刷 TLB，否则陈旧翻译会让 U-mode 访问误报 #PF
+        paging_flush_tlb();
     }
 
     void unmap4k(long root, long virt) {
@@ -155,6 +180,7 @@ class RISCVPageTableManager implements IPageTableManager {
         if ((pmdEntry & (PTE_R | PTE_X)) != 0) return;  // 2MB 大页，不按 4KB 拆
         long pteTable = (pmdEntry & ~0x3FFL) << 2;
         System.write64(pteTable + (long)pteIndex * 8, 0);
+        paging_flush_tlb();
     }
 
     void loadRoot(long root) {

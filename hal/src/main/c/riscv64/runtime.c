@@ -82,3 +82,24 @@ unsigned long sys_now(void) {
 
 unsigned int sys_arch_protect(void) { return 0; }
 void sys_arch_unprotect(unsigned int lev) { (void)lev; }
+
+// JH7110 L2 cache 控制器 flush（移植自 starfive-u-boot arch/riscv/cpu/jh7110/cache.c）
+// JH7110 无 Zicbom cbo.clean，改走 L2 控制器 MMIO：往 0x2010200 写 cache line 地址即回写该行。
+// GOP framebuffer 直映写后必须调用，否则显示控制器读 DRAM 是 cache 里的旧数据。
+#define L2_CACHE_FLUSH64    0x200
+#define L2_CACHE_BASE_ADDR  0x2010000
+#define CACHELINE_SIZE      64
+
+void cache_clean_range(uint64_t addr, uint64_t size) {
+    if (size == 0) return;
+    volatile unsigned long *flush64 =
+        (volatile unsigned long *)(L2_CACHE_BASE_ADDR + L2_CACHE_FLUSH64);
+    __asm__ volatile("fence iorw, iorw" ::: "memory");
+    uint64_t line = addr & ~(uint64_t)(CACHELINE_SIZE - 1);
+    uint64_t end = addr + size;
+    for (; line < end; line += CACHELINE_SIZE) {
+        *flush64 = line;
+        __asm__ volatile("fence iorw, iorw" ::: "memory");
+    }
+    __asm__ volatile("fence iorw, iorw" ::: "memory");
+}

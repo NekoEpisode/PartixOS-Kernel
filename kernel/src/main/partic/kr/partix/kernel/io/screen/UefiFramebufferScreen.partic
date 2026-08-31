@@ -9,6 +9,9 @@ class UefiFramebufferScreen implements IScreen {
     private extern long gop_height;
     private extern long gop_stride;
 
+    // 架构相关 cache 回写（riscv: JH7110 L2 控制器 flush；x86: clflush）
+    private extern void cache_clean_range(long addr, long size);
+
     long getWidth()  -> gop_width
     long getHeight() -> gop_height
     long getStride() -> gop_stride
@@ -37,9 +40,20 @@ class UefiFramebufferScreen implements IScreen {
                 System.write32(fb + offset, pixel);
             }
         }
+        flush(x, y, w, h);
     }
 
     int setMode(long w, long h) -> ReturnCode.ERR_NOT_IMPLEMENTD
 
-    void flush(long x, long y, long w, long h) {}
+    /** GOP 直映：写 framebuffer 后回写 D-cache，否则显示控制器读 DRAM 是旧数据。
+     *  riscv JH7110：写 L2 控制器 flush 寄存器（无 cbo.clean）；
+     *  x86：clflush。 */
+    void flush(long x, long y, long w, long h) {
+        long fb = gop_framebuffer;
+        long stride = gop_stride;
+        if (fb == 0 || w <= 0 || h <= 0) return;
+        long xoff = x * 4;
+        long size = (h - 1) * stride + w * 4;
+        cache_clean_range(fb + y * stride + xoff, size);
+    }
 }

@@ -7,6 +7,10 @@ import kr.partix.kernel.process.Process;
 import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.sched.Thread;
 import kr.partix.kernel.sys.System;
+import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
 
 /**
  * fbinfo(screenId, buf)：写 4 个 long 到 buf：w h stride fb_addr
@@ -28,8 +32,31 @@ class SysFbinfo implements ISyscallHandler {
         if (as == null) return -1;
 
         long fbPhys = (long) screen.getFramebuffer();
-        long fbAddr = as.mapScreen(id, fbPhys, screen.getFramebufferSize());
+        long fbSize = screen.getFramebufferSize();
+        long fbAddr = as.mapScreen(id, fbPhys, fbSize);
         if (fbAddr < 0) return -1;
+
+        // 调试：打印 framebuffer 物理地址/大小/映射页数
+        long pages = (fbSize + 4095L) / 4096L;
+        StrBuilder sb = new StrBuilder();
+        sb.append("[fbinfo] id=");
+        str ids = StrUtils.longToStr(id);
+        sb.append(ids);
+        Memory.free(ids);
+        sb.append(" phys=0x");
+        sb.append(StrUtils.toHex(fbPhys));
+        sb.append(" size=");
+        str sz = StrUtils.longToStr(fbSize);
+        sb.append(sz);
+        Memory.free(sz);
+        sb.append(" pages=");
+        str pg = StrUtils.longToStr(pages);
+        sb.append(pg);
+        Memory.free(pg);
+        str msg = sb.build();
+        BspKrMain.arch.getUart().println(msg);
+        Memory.free(msg);
+        sb.dispose();
 
         System.write64(a1, screen.getWidth());
         System.write64(a1 + 8, screen.getHeight());

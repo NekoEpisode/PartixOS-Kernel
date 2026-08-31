@@ -8,6 +8,7 @@ import kr.partix.kernel.paging.PageFlags;
 
 class X86PageTableManager implements IPageTableManager {
     private extern void paging_load_cr3(long cr3);
+    private extern void paging_flush_tlb();
 
     private static final long PML4E_PRESENT  = 1;
     private static final long PML4E_RW       = 2;
@@ -76,6 +77,9 @@ class X86PageTableManager implements IPageTableManager {
         long pdBase = System.read64(pml4) & ~0xFFF;
         long pd = System.read64(pdBase + (long)pdIndex * 8) & ~0xFFF;
         System.write64(pd + (long)mbIndex * 8, entry);
+        // 页表修改后必须刷 TLB：否则用户态访问可能命中陈旧翻译（如恒等映射
+        // 的 2MB U/S=0 大页项）→ 误报 #PF（与 riscv 的 paging_flush_tlb 同源）
+        paging_flush_tlb();
     }
 
     void load() {
@@ -178,6 +182,8 @@ class X86PageTableManager implements IPageTableManager {
         }
 
         System.write64(pt + (long)ptIndex * 8, entry);
+        // 见 map()：PTE 写入后必须刷 TLB，否则陈旧翻译会让 U-mode 访问误报 #PF
+        paging_flush_tlb();
     }
 
     void unmap4k(long root, long virt) {
@@ -197,6 +203,7 @@ class X86PageTableManager implements IPageTableManager {
         if ((pde & PDE_PS_2MB) != 0) return;   // 2MB 大页，不按 4KB 拆
         long pt = pde & 0xFFFFFFFFFFFFF000L;
         System.write64(pt + (long)ptIndex * 8, 0);
+        paging_flush_tlb();
     }
 
     void loadRoot(long root) {
