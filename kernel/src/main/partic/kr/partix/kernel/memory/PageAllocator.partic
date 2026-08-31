@@ -70,6 +70,14 @@ class PageAllocator {
         count = carve(segs, count, kr_stack_bottom, kr_stack_top);
         // 空指针页（物理 0x0-0xFFF）不对外分配
         count = carve(segs, count, 0, 4096);
+        // 用户程序加载区（pbuild base_address 默认 0x400000 起，覆盖全部用户程序）：
+        // 内核恒等映射下该区物理页若被内核 heap 扩展分配，而用户进程又把这个
+        // 虚拟地址重映射成自己的只读代码页 → 内核在用户 CR3 下写它 → #PF 崩溃
+        // （x86 已复现：init base=0x600000 与 page_alloc 分出的物理页冲突）
+        // TODO 这是恒等映射下的 workaround：内核 VA==PA 导致内核内存与用户虚拟
+        // 地址共享同一空间 未来上非恒等映射/独立内核映射后 内核 heap 不再占用
+        // 用户可见虚拟地址 此保留区可移除 改由内核虚拟内存布局统一规划
+        count = carve(segs, count, 0x400000, 0x1000000);
         if (count <= 0) {
             BspKrMain.arch.getUart().println("[page allocator] no free memory after carve");
             return;
@@ -90,6 +98,7 @@ class PageAllocator {
         page_alloc_reserve(kr_heap_start, kr_heap_end - kr_heap_start);
         page_alloc_reserve(kr_stack_bottom, kr_stack_top - kr_stack_bottom);
         page_alloc_reserve(0, 4096);
+        page_alloc_reserve(0x400000, 0x1000000 - 0x400000);
         inited = true;
 
         long total = page_alloc_total_pages();

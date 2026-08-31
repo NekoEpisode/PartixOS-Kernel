@@ -133,6 +133,8 @@ class Scheduler {
         // 回写进程退出码：wait(pid) 通过 Process.exitCode 判断子进程已退出
         if (cur.owner() != null) {
             cur.owner().exitCode((int) code);
+            // 进程退出时关闭全部 fd（管道写端 refcount 归零 → 读端 EOF）
+            cur.owner().closeAllFds();
         }
     }
 
@@ -153,8 +155,8 @@ class Scheduler {
 
     static Thread createKernelThread(KernelRunnable r) -> Thread.createKernel(null, r)
 
-    static Thread createUserThread(Process owner, long userEntry, long userStackTop) ->
-        Thread.createUser(owner, userEntry, userStackTop)
+    static Thread createUserThread(Process owner, long userEntry, long userStackTop, long argsAddr) ->
+        Thread.createUser(owner, userEntry, userStackTop, argsAddr)
 
     private static Thread createIdleThread() {
         Thread t = new Thread(null, Threads.idleEntryStub(), 0, 0, 0);

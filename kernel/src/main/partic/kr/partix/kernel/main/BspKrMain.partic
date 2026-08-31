@@ -131,12 +131,11 @@ class BspKrMain {
 
     /** 从磁盘加载 init 程序（/bin/init）并创建进程，作为第一个用户进程。 */
     private static void bootUserProgram() {
-        // TODO 测试期临时加载 scrts 验证图形链路 完事改回 /bin/init
-        arch.getUart().println("[user] loading /bin/scrts from disk...");
-        long pid = ProcessManager.spawnFromPath("/bin/scrts");
+        arch.getUart().println("[user] loading init from disk...");
+        long pid = ProcessManager.spawnFromPath("/bin/init", null, -1, -1);
         if (pid >= 0) {
             StrBuilder sb = new StrBuilder();
-            sb.append("[user] scrts spawned, pid=");
+            sb.append("[user] init spawned, pid=");
             str pidStr = StrUtils.longToStr(pid);
             sb.append(pidStr);
             Memory.free(pidStr);
@@ -145,7 +144,7 @@ class BspKrMain {
             Memory.free(msg);
             sb.dispose();
         } else {
-            arch.getUart().println("[user] /bin/scrts not found or invalid on disk");
+            arch.getUart().println("[user] init not found or invalid on disk");
         }
     }
 }

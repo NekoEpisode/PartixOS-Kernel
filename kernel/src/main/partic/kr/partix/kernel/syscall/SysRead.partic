@@ -1,16 +1,27 @@
 package kr.partix.kernel.syscall;
 
-import kr.partix.kernel.fs.vfs.VFS;
+import kr.partix.kernel.fs.vfs.FileDescriptor;
+import kr.partix.kernel.fs.vfs.FileMode;
+import kr.partix.kernel.process.Process;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
 import kr.partix.kernel.sys.System;
 import lang.partic.stdlib.core.memory.Memory;
 
-/** read(fd, buf, len)：从文件描述符读入用户态缓冲区，返回实际字节数。 */
+/** read(fd, buf, len)：从进程 fd 表对应文件描述符读入用户态缓冲区。 */
 class SysRead implements ISyscallHandler {
     long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
         if (a2 <= 0 || a2 > 4096) return -1;
+        Thread t = Scheduler.current();
+        if (t == null || t.owner() == null) return -1;
+        Process owner = t.owner();
+        FileDescriptor desc = owner.getFd((int) a0);
+        if (desc == null || desc.ops == null) return -1;
+        if ((desc.mode & FileMode.READ) == 0) return -1; // 非读模式
+
         int len = (int) a2;
         byte[] buf = new byte[len];
-        int n = VFS.read((int) a0, buf, len);
+        int n = desc.ops.read(desc, buf, len);
         if (n > 0) {
             for (int i = 0; i < n; i++) {
                 System.write8(a1 + i, (byte) buf[i]);

@@ -16,4 +16,7 @@ class SyscallNum {
     static final int SCREEN_COUNT = 12;
     static final int FBINFO = 13;
     static final int FLIP = 14;
+    static final int PIPE = 15;
+    static final int DUP2 = 16;
+    static final int SPAWN_REDIR = 17;
 }

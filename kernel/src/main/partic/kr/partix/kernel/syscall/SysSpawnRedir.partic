@@ -6,8 +6,11 @@ import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.sched.Thread;
 import lang.partic.stdlib.core.memory.Memory;
 
-/** spawn(path, args)：从磁盘路径加载 ELF 创建子进程，返回 pid（<0 为错误码）。 */
-class SysSpawn implements ISyscallHandler {
+/**
+ * spawn_redir(path, child_fd, parent_fd, args)：spawn 子进程并把父进程
+ * parent_fd 槽映射到子进程 child_fd 槽（显式配对 无隐含语义）
+ */
+class SysSpawnRedir implements ISyscallHandler {
     long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
         Thread t = Scheduler.current();
         if (t == null || t.owner() == null) return -1;
@@ -19,8 +22,8 @@ class SysSpawn implements ISyscallHandler {
         Memory.free((long) userPath);
         if (resolved == null) return -1;
 
-        str args = Syscall.copyUserString(a1);   // 可为 null
-        long pid = ProcessManager.spawnFromPath(resolved, args, -1, -1);
+        str args = Syscall.copyUserString(a3);   // 可为 null
+        long pid = ProcessManager.spawnFromPath(resolved, args, (int) a1, (int) a2);
         if (args != null) Memory.free((long) args);
         Memory.free((long) resolved);
         return pid;

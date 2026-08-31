@@ -23,6 +23,9 @@ class AddressSpace {
     static final long FB_REGION_SIZE = 0x1000000L;
     static final int MAX_SCREENS = 8;
 
+    /** 用户态 args 字符串映射地址（避开程序基址与 fb 区）。 */
+    static final long USER_ARGS_BASE = 0x08000000L;
+
     private static final int MAX_PAGES = 1024;
 
     private final IPageTableManager ptm;
@@ -31,6 +34,7 @@ class AddressSpace {
     private final long[] pagePhys = new long[MAX_PAGES];
     private final int[] pageFlags = new int[MAX_PAGES];
     private final boolean[] fbMapped = new boolean[MAX_SCREENS];
+    private boolean argsMapped = false;
     private int pageCount = 0;
 
     AddressSpace(IPageTableManager ptm) {
@@ -108,6 +112,25 @@ class AddressSpace {
         }
         fbMapped[screenId] = true;
         return base;
+    }
+
+    /**
+     * 把 args 字符串拷入用户页并映射到 USER_ARGS_BASE（最多 4095 字节）
+     * 返回用户虚拟地址；失败返回 -1
+     */
+    long mapArgs(str args) {
+        if (argsMapped) return USER_ARGS_BASE;
+        int len = 0;
+        while (len < 4095 && args[len] != (byte) 0) len += 1;
+        long phys = PageAllocator.allocPage();
+        if (phys == 0) return -1;
+        for (int i = 0; i <= len; i += 1) {
+            System.write8(phys + i, args[i]);
+        }
+        ptm.map4k(root, USER_ARGS_BASE, phys,
+                  PageFlags.USER | PageFlags.WRITABLE | PageFlags.NO_EXEC);
+        argsMapped = true;
+        return USER_ARGS_BASE;
     }
 
     private int findPage(long vaddr) {

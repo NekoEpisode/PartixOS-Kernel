@@ -1,0 +1,32 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.fs.vfs.FileDescriptor;
+import kr.partix.kernel.fs.vfs.FileMode;
+import kr.partix.kernel.fs.vfs.PipeOps;
+import kr.partix.kernel.process.Process;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
+import kr.partix.kernel.sys.System;
+
+/** pipe(fds[2])：创建管道，写回读写两个 fd。 */
+class SysPipe implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        if (a0 == 0) return -1;
+        Thread t = Scheduler.current();
+        if (t == null || t.owner() == null) return -1;
+        Process owner = t.owner();
+
+        PipeOps pipe = new PipeOps(4096);
+        int readFd = owner.allocFd(new FileDescriptor(pipe, FileMode.READ));
+        if (readFd < 0) return -1;
+        int writeFd = owner.allocFd(new FileDescriptor(pipe, FileMode.WRITE));
+        if (writeFd < 0) {
+            owner.clearFd(readFd);
+            return -1;
+        }
+
+        System.write64(a0, (long) readFd);
+        System.write64(a0 + 8, (long) writeFd);
+        return 0;
+    }
+}

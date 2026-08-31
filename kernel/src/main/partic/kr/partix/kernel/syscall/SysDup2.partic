@@ -1,0 +1,47 @@
+package kr.partix.kernel.syscall;
+
+import kr.partix.kernel.fs.vfs.FileDescriptor;
+import kr.partix.kernel.fs.vfs.FileMode;
+import kr.partix.kernel.fs.vfs.PipeOps;
+import kr.partix.kernel.process.Process;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * dup2(oldfd, newfd)：把 oldfd 槽复制到 newfd 槽
+ * newfd 槽原值 refcount 递减（归零时 close）
+ * 进程自行编排 fd 布局 内核不假定任何 fd 语义
+ */
+class SysDup2 implements ISyscallHandler {
+    long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
+        Thread t = Scheduler.current();
+        if (t == null || t.owner() == null) return -1;
+        Process owner = t.owner();
+
+        int oldfd = (int) a0;
+        int newfd = (int) a1;
+
+        FileDescriptor src = owner.getFd(oldfd);
+        if (src == null) return -1;
+
+        // POSIX dup2(old, old)：old 有效则原样返回
+        if (oldfd == newfd) return (long) newfd;
+
+        FileDescriptor old = owner.getFd(newfd);
+        if (old != null) {
+            old.refCount -= 1;
+            if (old.refCount <= 0) {
+                if (old.ops != null) old.ops.close(old);
+                Memory.free((long) old);
+            }
+        }
+
+        src.refCount += 1;
+        if (src.ops instanceof PipeOps) {
+            ((PipeOps) src.ops).onDup((src.mode & FileMode.WRITE) != 0);
+        }
+        owner.setFd(newfd, src);
+        return (long) newfd;
+    }
+}

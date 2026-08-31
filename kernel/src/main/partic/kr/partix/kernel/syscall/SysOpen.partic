@@ -1,29 +1,27 @@
 package kr.partix.kernel.syscall;
 
+import kr.partix.kernel.fs.vfs.FileDescriptor;
+import kr.partix.kernel.fs.vfs.FileMode;
 import kr.partix.kernel.fs.vfs.VFS;
-import kr.partix.kernel.sys.System;
+import kr.partix.kernel.process.Process;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
 import lang.partic.stdlib.core.memory.Memory;
 
-/** open(path, mode)：打开虚拟/磁盘文件，返回 fd（<0 为错误码）。 */
+/** open(path, mode)：打开虚拟/磁盘文件，分配进程 fd 槽（fd 编号无语义）。 */
 class SysOpen implements ISyscallHandler {
     long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
-        // a0 = 用户态路径指针（字节串）；先转成 Partic str 再交给 VFS。
-        // 简化为按长度拷贝：路径以 0 结尾，最多 256 字节。
-        long p = a0;
-        int len = 0;
-        while (len < 256) {
-            byte b = (byte) System.read8(p + len);
-            if (b == 0) break;
-            len += 1;
-        }
-        if (len == 0) return -1;
-        str path = (str) Memory.malloc(len + 1);
-        for (int i = 0; i < len; i += 1) {
-            path[i] = (byte) System.read8(p + i);
-        }
-        path[len] = (byte) 0;
-        int fd = VFS.open(path, (int) a1);
+        Thread t = Scheduler.current();
+        if (t == null || t.owner() == null) return -1;
+        Process owner = t.owner();
+
+        str path = Syscall.copyUserString(a0);
+        if (path == null) return -1;
+        FileDescriptor desc = VFS.openDesc(path, (int) a1);
         Memory.free((long) path);
+        if (desc == null) return (long) FileMode.ERR_NOT_FOUND;
+        int fd = owner.allocFd(desc);
+        if (fd < 0) return (long) FileMode.ERR_NO_FD;
         return (long) fd;
     }
 }

@@ -31,6 +31,9 @@ class Syscall {
         register(SyscallNum.SCREEN_COUNT, new SysScreenCount());
         register(SyscallNum.FBINFO, new SysFbinfo());
         register(SyscallNum.FLIP, new SysFlip());
+        register(SyscallNum.PIPE, new SysPipe());
+        register(SyscallNum.DUP2, new SysDup2());
+        register(SyscallNum.SPAWN_REDIR, new SysSpawnRedir());
     }
 
     static void register(int num, ISyscallHandler handler) {

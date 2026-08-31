@@ -1,5 +1,6 @@
 package kr.partix.kernel.process;
 
+import kr.partix.kernel.fs.vfs.FileDescriptor;
 import kr.partix.kernel.paging.AddressSpace;
 import kr.partix.kernel.program.IProgram;
 import lang.partic.stdlib.additional.collection.list.List;
@@ -8,6 +9,9 @@ import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.core.memory.Memory;
 
 class Process {
+    /** 每进程 fd 表槽数。 */
+    static final int MAX_FDS = 96;
+
     private final str name;
     private final IProgram program;
     private final List<Thread> threads; // get(tid) 进程中唯一
@@ -16,6 +20,7 @@ class Process {
     private int exitCode = -1;
     private long parentPid = 0;
     private byte[] cwd = new byte[256];
+    private final FileDescriptor[] fds = new FileDescriptor[MAX_FDS];
 
     Process(str name, IProgram program, List<Thread> threads) {
         this.name = name;
@@ -45,6 +50,47 @@ class Process {
         parentPid = p;
     }
     byte[] cwd() -> cwd
+
+    /** 分配一个空闲 fd 槽（从 0 起），返回槽号；无空槽返回 -1。 */
+    int allocFd(FileDescriptor desc) {
+        for (int i = 0; i < MAX_FDS; i += 1) {
+            if (fds[i] == null) {
+                fds[i] = desc;
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /** 取 fd 槽；越界或空槽返回 null。 */
+    FileDescriptor getFd(int fd) {
+        if (fd < 0 || fd >= MAX_FDS) return null;
+        return fds[fd];
+    }
+
+    /** 设置 fd 槽（不管理 refcount）。 */
+    void setFd(int fd, FileDescriptor desc) {
+        if (fd >= 0 && fd < MAX_FDS) {
+            fds[fd] = desc;
+        }
+    }
+
+    /** 清空 fd 槽（不调用 close，调用方负责 refcount）。 */
+    void clearFd(int fd) {
+        if (fd >= 0 && fd < MAX_FDS) {
+            fds[fd] = null;
+        }
+    }
+
+    /** 关闭进程全部 fd（进程退出时调用，释放管道/文件引用）。 */
+    void closeAllFds() {
+        for (int i = 0; i < MAX_FDS; i += 1) {
+            FileDescriptor desc = fds[i];
+            if (desc == null) continue;
+            if (desc.ops != null) desc.ops.close(desc);
+            fds[i] = null;
+        }
+    }
 
     /** 把 str 路径写入进程 cwd 缓冲（最多 255 字节）。 */
     void setCwd(str path) {

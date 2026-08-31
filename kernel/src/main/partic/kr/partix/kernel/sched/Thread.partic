@@ -64,8 +64,8 @@ class Thread {
     static Thread createKernel(Process owner, KernelRunnable r) ->
         new Thread(owner, Threads.entryStub(), (long) r, 0, 0)
 
-    static Thread createUser(Process owner, long userEntry, long userStackTop) ->
-        new Thread(owner, 0, 0, userEntry, userStackTop)
+    static Thread createUser(Process owner, long userEntry, long userStackTop, long argsAddr) ->
+        new Thread(owner, 0, argsAddr, userEntry, userStackTop)
 
     int tid() -> tid
     Process owner() -> owner

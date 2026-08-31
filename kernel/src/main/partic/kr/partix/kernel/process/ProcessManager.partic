@@ -6,9 +6,11 @@ import kr.partix.kernel.program.IProgram;
 import kr.partix.kernel.program.ProgramLoaderRegistry;
 import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.sched.Thread;
+import kr.partix.kernel.fs.vfs.FileDescriptor;
 import kr.partix.kernel.fs.vfs.FileMode;
 import kr.partix.kernel.fs.vfs.INode;
 import kr.partix.kernel.fs.vfs.Path;
+import kr.partix.kernel.fs.vfs.PipeOps;
 import kr.partix.kernel.fs.vfs.VFS;
 import lang.partic.stdlib.additional.collection.list.ArrayList;
 import lang.partic.stdlib.additional.collection.list.List;
@@ -20,9 +22,10 @@ class ProcessManager {
 
     /**
      * 创建进程：建地址空间、映射程序段与用户栈、创建主线程并入调度。
+     * args 非空时映射到用户空间并作为主线程入口参数（crt 解析 argv）。
      * 返回 null 表示 meta 非法。
      */
-    static Process createProcess(ProcessMeta meta) {
+    static Process createProcess(ProcessMeta meta, str args) {
         if (meta == null) return null;
         AddressSpace as = new AddressSpace(BspKrMain.arch.getPageTableManager());
         IProgram prog = meta.program();
@@ -32,13 +35,19 @@ class ProcessManager {
         }
         as.mapUserStack();
 
+        long argsAddr = 0;
+        if (args != null && args[0] != (byte) 0) {
+            argsAddr = as.mapArgs(args);
+        }
+
         Process process = new Process(meta.name(), prog, new ArrayList<Thread>());
         process.pid(nextPid);
         nextPid += 1;
         process.addressSpace(as);
 
         if (prog != null) {
-            Thread main = Scheduler.createUserThread(process, prog.getEntry(), AddressSpace.USER_STACK_TOP);
+            Thread main = Scheduler.createUserThread(process, prog.getEntry(),
+                    AddressSpace.USER_STACK_TOP, argsAddr);
             process.threads().add(main);
             Scheduler.add(main);
         }
@@ -57,9 +66,11 @@ class ProcessManager {
 
     /**
      * spawn：从磁盘路径读 ELF → 解析 → 创建进程（继承父进程 cwd）。
+     * args 为用户命令行参数串（可为 null），映射进子进程用户空间。
+     * childFd/parentFd >= 0 时把父进程 parentFd 槽复制到子进程 childFd 槽
      * 返回新进程 pid；失败返回 <0。
      */
-    static long spawnFromPath(str path) {
+    static long spawnFromPath(str path, str args, int childFd, int parentFd) {
         INode inode = VFS.stat(path);
         if (inode == null || !inode.isFile()) return (long) FileMode.ERR_NOT_FOUND;
         long size = inode.size;
@@ -89,7 +100,7 @@ class ProcessManager {
         mb.program(prog);
         mb.data(data);
         ProcessMeta meta = mb.build();
-        Process p = createProcess(meta);
+        Process p = createProcess(meta, args);
         Memory.free((long) meta);
         Memory.free((long) mb);
         if (p == null) {
@@ -101,6 +112,17 @@ class ProcessManager {
         if (cur != null && cur.owner() != null) {
             p.parentPid(cur.owner().pid());
             p.copyCwdFrom(cur.owner());
+            // 显式 fd 映射：父进程 parentFd 槽复制到子进程 childFd 槽
+            if (childFd >= 0 && parentFd >= 0) {
+                FileDescriptor src = cur.owner().getFd(parentFd);
+                if (src != null) {
+                    src.refCount += 1;
+                    if (src.ops instanceof PipeOps) {
+                        ((PipeOps) src.ops).onDup((src.mode & FileMode.WRITE) != 0);
+                    }
+                    p.setFd(childFd, src);
+                }
+            }
         }
         return p.pid();
     }

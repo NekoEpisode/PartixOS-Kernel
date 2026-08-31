@@ -1,10 +1,21 @@
 package kr.partix.kernel.syscall;
 
-import kr.partix.kernel.fs.vfs.VFS;
+import kr.partix.kernel.fs.vfs.FileDescriptor;
+import kr.partix.kernel.fs.vfs.FileMode;
+import kr.partix.kernel.process.Process;
+import kr.partix.kernel.sched.Scheduler;
+import kr.partix.kernel.sched.Thread;
 
-/** close(fd)：关闭文件描述符。 */
+/** close(fd)：关闭进程 fd 表对应槽（refcount 递减，归零时 ops.close）。 */
 class SysClose implements ISyscallHandler {
     long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
-        return (long) VFS.close((int) a0);
+        Thread t = Scheduler.current();
+        if (t == null || t.owner() == null) return -1;
+        Process owner = t.owner();
+        FileDescriptor desc = owner.getFd((int) a0);
+        if (desc == null) return (long) FileMode.ERR_BAD_FD;
+        if (desc.ops != null) desc.ops.close(desc);
+        owner.clearFd((int) a0);
+        return 0;
     }
 }

@@ -3,6 +3,7 @@ package kr.partix.kernel.main.inits;
 import kr.partix.kernel.arch.x86.Ps2Keyboard;
 import kr.partix.kernel.fs.vfs.FileMode;
 import kr.partix.kernel.fs.vfs.KbdFileOps;
+import kr.partix.kernel.fs.vfs.UartOps;
 import kr.partix.kernel.fs.vfs.VirtualRegistry;
 import kr.partix.kernel.io.input.IInputDevice;
 import kr.partix.kernel.io.input.InputRegistry;
@@ -20,6 +21,8 @@ import lang.partic.stdlib.additional.utils.StrUtils;
 class DevFSInit {
     static void init() {
         VirtualRegistry.init();
+        // UART 控制台：进程 open 后自行编排 fd 布局（fd 编号无语义约定）
+        VirtualRegistry.register("/dev/console", new UartOps(), FileMode.WRITE);
         InputRegistry.init();
         // x86 键盘是平台设备（非 PCI），直接注册；riscv 走 virtio 驱动。
         if (BspKrMain.arch.getArchId() == 0) {

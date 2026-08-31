@@ -1,0 +1,23 @@
+package kr.partix.kernel.fs.vfs;
+
+import kr.partix.kernel.main.BspKrMain;
+
+/**
+ * UART 控制台输出 ops：write 打到主 UART。
+ * 注册为 /dev/console 虚拟节点，进程 open 后自行编排 fd 布局
+ */
+class UartOps implements IFileOps {
+    public int read(FileDescriptor fd, byte[] buf, int len) -> -1
+
+    public int write(FileDescriptor fd, byte[] buf, int len) {
+        for (int i = 0; i < len; i += 1) {
+            BspKrMain.arch.getUart().print(buf[i]);
+        }
+        return len;
+    }
+
+    public long seek(FileDescriptor fd, long offset, int whence) -> -1
+
+    public void close(FileDescriptor fd) {
+    }
+}

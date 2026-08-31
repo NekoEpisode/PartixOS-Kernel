@@ -1,0 +1,82 @@
+package kr.partix.kernel.fs.vfs;
+
+import kr.partix.kernel.sched.Scheduler;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * 管道：环形缓冲，读写端共享同一 PipeOps 实例。
+ * read 空时阻塞轮询（沿用 KbdFileOps 模式），writer 关闭且空返回 0（EOF）
+ * write 满时返回实际写入字节数（部分写），阻塞写留待后续
+ */
+class PipeOps implements IFileOps {
+    private byte[] ring;
+    private int head;
+    private int tail;
+    private int count;
+    private int capacity;
+    private boolean writerClosed;
+    private int refs;       // 总描述符引用（读写端合计）
+    private int writeRefs;  // 写端引用数
+
+    PipeOps(int size) {
+        ring = new byte[size];
+        head = 0;
+        tail = 0;
+        count = 0;
+        capacity = size;
+        writerClosed = false;
+        refs = 2;        // 读端 + 写端
+        writeRefs = 1;   // 初始一个写端
+    }
+
+    /** fd 槽被复制（dup2 / spawn 重定向）时调用。 */
+    void onDup(boolean isWrite) {
+        refs += 1;
+        if (isWrite) writeRefs += 1;
+    }
+
+    public int read(FileDescriptor fd, byte[] buf, int len) {
+        while (count == 0) {
+            if (writerClosed) return 0; // EOF
+            Scheduler.sleep(10);
+        }
+        int n = len;
+        if (n > count) n = count;
+        for (int i = 0; i < n; i += 1) {
+            buf[i] = ring[tail];
+            tail = (tail + 1) % capacity;
+        }
+        count -= n;
+        return n;
+    }
+
+    public int write(FileDescriptor fd, byte[] buf, int len) {
+        if (writerClosed) return -1;
+        int space = capacity - count;
+        int n = len;
+        if (n > space) n = space;
+        if (n == 0) return 0;
+        for (int i = 0; i < n; i += 1) {
+            ring[head] = buf[i];
+            head = (head + 1) % capacity;
+        }
+        count += n;
+        return n;
+    }
+
+    public long seek(FileDescriptor fd, long offset, int whence) -> 0
+
+    public void close(FileDescriptor fd) {
+        refs -= 1;
+        if ((fd.mode & FileMode.WRITE) != 0) {
+            writeRefs -= 1;
+            // 只有最后一个写端引用关闭才算 writerClosed（父进程关自己
+            // 的写端不应影响子进程继续写）
+            if (writeRefs <= 0) writerClosed = true;
+        }
+        if (refs <= 0 && ring != null) {
+            Memory.free((long) ring);
+            ring = null;
+        }
+    }
+}
