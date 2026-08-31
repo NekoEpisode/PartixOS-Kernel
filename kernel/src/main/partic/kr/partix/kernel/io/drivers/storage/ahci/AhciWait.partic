@@ -4,9 +4,7 @@ import kr.partix.kernel.sys.System;
 import kr.partix.kernel.timer.Timer;
 
 /**
- * AHCI 等待辅助：tick 粒度轮询 + 可配超时。
- * 不用固定大循环——QEMU tcg 下每次 MMIO 读约 1μs，固定 1000 万次会白等数秒，
- * 而设备就绪实际在微秒/毫秒级。默认超时 1 秒（Timer.TICK_HZ ticks）。
+ * AHCI 等待辅助：tick 粒度轮询 + 可配超时，默认 1 秒（Timer.TICK_HZ ticks）。
  */
 class AhciWait {
     static void until(long reg, int want) {

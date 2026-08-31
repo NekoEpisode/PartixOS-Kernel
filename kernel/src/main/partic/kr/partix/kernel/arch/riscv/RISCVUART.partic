@@ -18,10 +18,8 @@ class RISCVUART implements IUART {
     }
 
     void print(byte b) {
-        // Wait for the transmitter to be ready (LSR bit5 = THRE).
-        // Timeout (1 s) guards against a broken UART hanging the kernel;
-        // on timeout the byte is dropped. Interrupts keep ticking meanwhile.
-        // DW-APB (reg-shift=2) 下 LSR 在 base+(5<<2)=base+0x14，不能按 16550
+        // 等发送器就绪（LSR bit5 = THRE），1 秒超时兜底（超时丢弃该字节）。
+        // DW-APB（reg-shift=2）下 LSR 在 base+(5<<2)=base+0x14，不能按 16550
         // 的 base+0x05 访问——那会读到 IER，THRE 永不置位导致启动即挂死。
         long deadline = Timer.getTicks() + Timer.TICK_HZ;
         long lsr = addr + (5L << shift);

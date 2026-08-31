@@ -74,9 +74,9 @@ class PageAllocator {
         // 内核恒等映射下该区物理页若被内核 heap 扩展分配，而用户进程又把这个
         // 虚拟地址重映射成自己的只读代码页 → 内核在用户 CR3 下写它 → #PF 崩溃
         // （x86 已复现：init base=0x600000 与 page_alloc 分出的物理页冲突）
-        // TODO 这是恒等映射下的 workaround：内核 VA==PA 导致内核内存与用户虚拟
-        // 地址共享同一空间 未来上非恒等映射/独立内核映射后 内核 heap 不再占用
-        // 用户可见虚拟地址 此保留区可移除 改由内核虚拟内存布局统一规划
+        // TODO 这是恒等映射下的 workaround：内核 VA==PA，导致内核内存与用户
+        // 虚拟地址共享同一空间。未来上非恒等映射后，内核 heap 不再占用用户可见
+        // 虚拟地址，此保留区可移除，改由内核虚拟内存布局统一规划。
         count = carve(segs, count, 0x400000, 0x1000000);
         if (count <= 0) {
             BspKrMain.arch.getUart().println("[page allocator] no free memory after carve");

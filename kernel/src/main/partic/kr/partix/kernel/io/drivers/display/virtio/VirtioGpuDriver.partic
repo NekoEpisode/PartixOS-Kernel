@@ -162,7 +162,7 @@ class VirtioGpuDriver implements IDisplayDriver {
         int di = virtio_gpu_get_display_info(devStruct, infoBuf);
         int timeouts = virtio_gpu_timeout_count();
         if (di < 0 || timeouts > 0) {
-            // GPU 不响应 不添加 screen，由调用方显式处理无屏
+            // GPU 不响应，不添加 screen；由调用方显式处理无屏
             if (di < 0) {
                 StartupLogger.warn("virtio-gpu: device not responding (display info timed out)");
             } else {

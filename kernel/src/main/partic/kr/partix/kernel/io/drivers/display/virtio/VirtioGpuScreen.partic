@@ -35,10 +35,9 @@ class VirtioGpuScreen implements IScreen {
         this.height = (long) height;
 
         long fbSize = ((long)width * (long)height * 4 + 4095) & ~4095;
-        // TODO 依赖内核恒等映射 即 VA==PA 这里 malloc 的地址直接当物理地址用
-        // TODO 上非恒等映射后需改为物理页分配或 VA 到 PA 转换
-        // 页对齐：mapScreen 按 4KB 页映射 framebuffer 给用户态
-        // 非对齐地址会丢页内偏移 导致显示错位 保留原始指针供 free
+        // TODO 依赖内核恒等映射（VA==PA）：malloc 的地址直接当物理地址用，
+        // 上非恒等映射后需改为物理页分配或 VA→PA 转换。
+        // fbPhys 按 4KB 页对齐（mapScreen 按页映射）；保留原始指针 fbRaw 供 free。
         fbRaw = Memory.malloc((int)fbSize + 4096);
         fbPhys = (fbRaw + 4095L) & ~4095L;
 
@@ -88,8 +87,7 @@ class VirtioGpuScreen implements IScreen {
         virtio_gpu_create_2d(dev, resourceId, 1, (int)w, (int)h);
 
         long fbSize = ((long)w * (long)h * 4 + 4095) & ~4095;
-        // TODO 同构造函数 依赖恒等映射 VA==PA
-        // 页对齐同构造函数 保留原始指针供 free
+        // 同构造函数：依赖恒等映射 + 页对齐，保留原始指针供 free
         fbRaw = Memory.malloc((int)fbSize + 4096);
         fbPhys = (fbRaw + 4095L) & ~4095L;
         virtio_gpu_attach_backing(dev, resourceId, fbPhys, (int)fbSize);

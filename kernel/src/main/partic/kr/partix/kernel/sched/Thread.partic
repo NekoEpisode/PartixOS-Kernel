@@ -46,10 +46,10 @@ class Thread {
         long sstatus;
         if (userEntry != 0) {
             savedSp = userStackTop;
-            sstatus = 0x2020;                // SPP=0 用户态, SPIE=1, FS=1(FPU)
+            sstatus = 0x2020;                // SPP=0 用户态, SPIE=1, FS=10(clean)
         } else {
             savedSp = kernelStackTop - 512;
-            sstatus = 0x42120;               // SPP=1 内核态, SPIE=1, SUM=1, FS=1(FPU)
+            sstatus = 0x42120;               // SPP=1 内核态, SPIE=1, SUM=1, FS=10(clean)
         }
         long frameEntry;
         if (entry != 0) frameEntry = entry;

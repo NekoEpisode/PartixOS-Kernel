@@ -55,7 +55,6 @@ class ELF {
         if (phnum > MAX_PHDRS || phentsize < 56) return null;
         if (shnum > MAX_SHDRS || shentsize < 64) return null;
 
-        // 程序段
         ELFSegment[] segs = new ELFSegment[phnum];
         for (int i = 0; i < phnum; i++) {
             long base = phoff + (long) i * phentsize;

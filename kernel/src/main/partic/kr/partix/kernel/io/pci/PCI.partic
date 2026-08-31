@@ -65,7 +65,7 @@ class PCI {
                     if (dev != null && deviceCount < MAX_DEVICES) {
                         devices[deviceCount] = dev;
                         deviceCount += 1;
-                        DeviceRegistry.register(dev);   // 进入设备注册中心
+                        DeviceRegistry.register(dev);
                     }
                     if (!dev.isMultiFunction()) break;
                 }

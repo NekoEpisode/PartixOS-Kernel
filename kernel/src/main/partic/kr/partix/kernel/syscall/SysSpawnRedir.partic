@@ -8,7 +8,7 @@ import lang.partic.stdlib.core.memory.Memory;
 
 /**
  * spawn_redir(path, child_fd, parent_fd, args)：spawn 子进程并把父进程
- * parent_fd 槽映射到子进程 child_fd 槽（显式配对 无隐含语义）
+ * parent_fd 槽映射到子进程 child_fd 槽（显式配对，无隐含语义）
  */
 class SysSpawnRedir implements ISyscallHandler {
     long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
