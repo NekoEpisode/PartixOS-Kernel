@@ -2,7 +2,7 @@ package kr.partix.kernel.syscall;
 
 import kr.partix.kernel.fs.vfs.FileDescriptor;
 import kr.partix.kernel.fs.vfs.FileMode;
-import kr.partix.kernel.fs.vfs.PipeOps;
+import kr.partix.kernel.fs.vfs.fileops.PipeOps;
 import kr.partix.kernel.process.Process;
 import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.sched.Thread;
@@ -11,7 +11,6 @@ import lang.partic.stdlib.core.memory.Memory;
 /**
  * dup2(oldfd, newfd)：把 oldfd 槽复制到 newfd 槽
  * newfd 槽原值 refcount 递减（归零时 close）
- * 进程自行编排 fd 布局 内核不假定任何 fd 语义
  */
 class SysDup2 implements ISyscallHandler {
     long handle(long a0, long a1, long a2, long a3, long a4, long a5) {

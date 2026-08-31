@@ -1,6 +1,7 @@
 package kr.partix.kernel.fs.vfs;
 
 import lang.partic.stdlib.additional.utils.StrUtils;
+import kr.partix.kernel.fs.vfs.fileops.IFileOps;
 
 class VirtualRegistry {
     private static final int MAX_ENTRIES = 32;

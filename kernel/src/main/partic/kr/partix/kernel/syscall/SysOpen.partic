@@ -8,7 +8,7 @@ import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.sched.Thread;
 import lang.partic.stdlib.core.memory.Memory;
 
-/** open(path, mode)：打开虚拟/磁盘文件，分配进程 fd 槽（fd 编号无语义）。 */
+/** open(path, mode)：打开虚拟/磁盘文件，分配进程 fd 槽 */
 class SysOpen implements ISyscallHandler {
     long handle(long a0, long a1, long a2, long a3, long a4, long a5) {
         Thread t = Scheduler.current();

@@ -2,7 +2,7 @@ package kr.partix.kernel.syscall;
 
 import kr.partix.kernel.fs.vfs.FileDescriptor;
 import kr.partix.kernel.fs.vfs.FileMode;
-import kr.partix.kernel.fs.vfs.PipeOps;
+import kr.partix.kernel.fs.vfs.fileops.PipeOps;
 import kr.partix.kernel.process.Process;
 import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.sched.Thread;

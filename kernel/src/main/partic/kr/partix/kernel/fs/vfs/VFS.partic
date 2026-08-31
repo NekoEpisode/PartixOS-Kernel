@@ -3,6 +3,8 @@ package kr.partix.kernel.fs.vfs;
 import kr.partix.kernel.io.disk.IDisk;
 import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.core.memory.Memory;
+import kr.partix.kernel.fs.vfs.fileops.IFileOps;
+import kr.partix.kernel.fs.vfs.fileops.DiskFileOps;
 
 class VFS {
     static int mount(str path, IDisk disk, IFileSystem fs) -> MountTable.mount(path, disk, fs)

@@ -10,7 +10,7 @@ import kr.partix.kernel.fs.vfs.FileDescriptor;
 import kr.partix.kernel.fs.vfs.FileMode;
 import kr.partix.kernel.fs.vfs.INode;
 import kr.partix.kernel.fs.vfs.Path;
-import kr.partix.kernel.fs.vfs.PipeOps;
+import kr.partix.kernel.fs.vfs.fileops.PipeOps;
 import kr.partix.kernel.fs.vfs.VFS;
 import lang.partic.stdlib.additional.collection.list.ArrayList;
 import lang.partic.stdlib.additional.collection.list.List;

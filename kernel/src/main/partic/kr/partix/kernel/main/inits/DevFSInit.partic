@@ -2,8 +2,8 @@ package kr.partix.kernel.main.inits;
 
 import kr.partix.kernel.arch.x86.Ps2Keyboard;
 import kr.partix.kernel.fs.vfs.FileMode;
-import kr.partix.kernel.fs.vfs.KbdFileOps;
-import kr.partix.kernel.fs.vfs.UartOps;
+import kr.partix.kernel.fs.vfs.fileops.KbdFileOps;
+import kr.partix.kernel.fs.vfs.fileops.UartOps;
 import kr.partix.kernel.fs.vfs.VirtualRegistry;
 import kr.partix.kernel.io.input.IInputDevice;
 import kr.partix.kernel.io.input.InputRegistry;

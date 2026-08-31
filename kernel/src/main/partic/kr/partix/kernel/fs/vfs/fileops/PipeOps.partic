@@ -1,5 +1,6 @@
-package kr.partix.kernel.fs.vfs;
+package kr.partix.kernel.fs.vfs.fileops;
 
+import kr.partix.kernel.fs.vfs.*;
 import kr.partix.kernel.sched.Scheduler;
 import lang.partic.stdlib.core.memory.Memory;
 

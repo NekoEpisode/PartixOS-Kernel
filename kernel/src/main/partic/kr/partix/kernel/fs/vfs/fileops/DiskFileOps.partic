@@ -1,4 +1,6 @@
-package kr.partix.kernel.fs.vfs;
+package kr.partix.kernel.fs.vfs.fileops;
+
+import kr.partix.kernel.fs.vfs.*;
 
 class DiskFileOps implements IFileOps {
     private INode inode;
