@@ -106,6 +106,7 @@ class BuildSettings:
     toolchains: Dict[str, ToolchainConfig] = field(default_factory=dict)
     qemu: Dict[str, QemuConfig] = field(default_factory=dict)
     partic: ParticConfig = field(default_factory=ParticConfig)
+    user_programs: str = ""   # OfficialUserPrograms 根目录（QEMU 系统盘 bin/ 用户程序来源）
 
     def qemu_for(self, arch: str) -> QemuConfig:
         qc = self.qemu.get(arch, QemuConfig())
@@ -161,6 +162,28 @@ def _auto_detect_toolchain() -> ToolchainConfig:
     return ToolchainConfig(clang=clang, linker=linker, linker_mode=mode)
 
 
+DEFAULT_USER_PROGRAMS = "/mnt/e/Partix_OS/OfficialUserPrograms"
+
+
+def _ask_user_programs() -> str:
+    """询问 OfficialUserPrograms 根目录（构建 QEMU 系统盘 bin/ 用户程序来源）。"""
+    while True:
+        val = input(f"  UserPrograms root (enter=keep [{DEFAULT_USER_PROGRAMS}]): ").strip()
+        if not val:
+            return DEFAULT_USER_PROGRAMS
+        if Path(val).is_dir():
+            return val
+        print(f"  not a directory: {val}")
+
+
+def _auto_detect_settings() -> BuildSettings:
+    settings = BuildSettings()
+    tc = _auto_detect_toolchain()
+    settings.toolchains["x86_64"] = tc
+    settings.user_programs = _ask_user_programs()
+    return settings
+
+
 def load_settings() -> BuildSettings:
     if CONFIG_PATH.exists():
         try:
@@ -191,13 +214,13 @@ def load_settings() -> BuildSettings:
                 jar=pd.get("jar", ""),
                 stdlib=pd.get("stdlib", ""),
             )
+            settings.user_programs = data.get("user_programs", "")
             return settings
         except (json.JSONDecodeError, KeyError):
             pass
 
     settings = BuildSettings()
-    tc = _auto_detect_toolchain()
-    settings.toolchains["x86_64"] = tc
+    settings = _auto_detect_settings()
     _save(settings)
     return settings
 
@@ -215,6 +238,7 @@ def _save(settings: BuildSettings) -> None:
             "jar": settings.partic.jar,
             "stdlib": settings.partic.stdlib,
         },
+        "user_programs": settings.user_programs,
     }
     for arch, tc in settings.toolchains.items():
         data["toolchains"][arch] = {

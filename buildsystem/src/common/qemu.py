@@ -239,6 +239,10 @@ def create_disk_image(efi_path: Path, disk_path: Path, size_mb: int = 64,
         )
 
         if extra_files:
+            # 先建子目录（如 bin/），再逐个拷贝
+            dirs = sorted({k.rsplit("/", 1)[0] for k in extra_files if "/" in k})
+            for d in dirs:
+                run_cmd(["mmd", "-i", dev, f"::{d}"], desc=f"create {d} dir")
             for dest_name, src_path in extra_files.items():
                 run_cmd(
                     ["mcopy", "-i", dev, str(src_path), f"::/{dest_name}"],

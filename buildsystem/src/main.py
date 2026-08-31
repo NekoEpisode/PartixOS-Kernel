@@ -1,4 +1,5 @@
 import argparse
+import json
 import shutil
 import sys
 from pathlib import Path, PurePath
@@ -114,10 +115,32 @@ def cmd_build(args: argparse.Namespace) -> int:
 def cmd_setup() -> int:
     if CONFIG_PATH.exists():
         CONFIG_PATH.unlink()
-    load_settings()
+    settings = load_settings()
     print("\n  config saved to buildsettings.json")
     print("\n  Tip: 记得检查 firmwares 文件夹，如果你遇到了固件功能缺失或其他问题，那里的固件或许会有用")
     return 0
+
+
+def collect_user_programs(user_root: Path, arch: str) -> dict:
+    """收集已编译的用户程序：按 project.json 发现项目名，产物在
+    build/<arch>/<name>/<name>.elf（与 install_user.sh 约定一致）。
+    返回 {name: elf_path}。"""
+    result = {}
+    if not user_root.is_dir():
+        return result
+    for pj in user_root.rglob("project.json"):
+        if any(part in pj.parts for part in ("pbuild", "build", ".pbuild", ".git")):
+            continue
+        try:
+            name = json.loads(pj.read_text()).get("name")
+        except Exception:
+            continue
+        if not name:
+            continue
+        elf = user_root / "build" / arch / name / f"{name}.elf"
+        if elf.is_file():
+            result[name] = elf
+    return result
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -145,6 +168,16 @@ def cmd_run(args: argparse.Namespace) -> int:
     extra = {}
     if outputs.get("kernel"):
         extra["KERNEL.ELF"] = outputs["kernel"]
+
+    # 用户程序 → bin/（单分区真实目录：内核挂载 ESP 后即 VFS /bin）
+    if settings.user_programs:
+        progs = collect_user_programs(Path(settings.user_programs), arch)
+        for name, elf in progs.items():
+            extra[f"bin/{name}"] = elf
+        if progs:
+            print(f"\n  [user programs] {', '.join(sorted(progs))}")
+        else:
+            print(f"\n  [user programs] none built in {settings.user_programs}/build/{arch}")
 
     efi_name = "BOOTRISCV64.EFI" if arch == "riscv64" else "BOOTX64.EFI"
     # startup.nsh：UEFI Shell 启动时自动执行，免去每次手动输入 EFI 路径。
