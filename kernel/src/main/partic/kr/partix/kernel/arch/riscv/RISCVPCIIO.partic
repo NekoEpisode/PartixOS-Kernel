@@ -1,18 +1,19 @@
 package kr.partix.kernel.arch.riscv;
 
 import kr.partix.kernel.sys.System;
+import kr.partix.kernel.memory.MemoryLayout;
 import kr.partix.kernel.io.pci.IPCIIO;
 
 class RISCVPCIIO implements IPCIIO {
     private long ecam;
 
     RISCVPCIIO(long ecam) {
-        this.ecam = ecam;
+        this.ecam = ecam == 0 ? 0 : MemoryLayout.physToVirt(ecam);
     }
 
     /** 基址可由 DT 扫描后更新（arch.init 里从 DeviceRegistry 的 PCIe 控制器节点取）。 */
     void updateEcam(long ecam) {
-        this.ecam = ecam;
+        this.ecam = ecam == 0 ? 0 : MemoryLayout.physToVirt(ecam);
     }
 
     /** ECAM 基址来自设备树；0 = 没有 PCI 主机控制器。 */

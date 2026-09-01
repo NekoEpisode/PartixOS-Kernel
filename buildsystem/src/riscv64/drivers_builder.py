@@ -50,6 +50,7 @@ class RISCV64DriversBuilder(Builder):
 
         cflags = DRIVERS_CFLAGS + (["-O0", "-g"] if self._debug else ["-O2"])
         cflags += [f"-I{HAL_ROOT}/Kernel/hal/src/main/c/riscv64/include"]
+        cflags += [f"-I{HAL_ROOT}/Kernel/hal/src/main/c/runtime"]
 
         all_objs: List[Path] = []
 

@@ -122,6 +122,16 @@ static EFI_STATUS load_file(CHAR16* path, VOID** out, UINT64* outSize) {
     return status;
 }
 
+// 内核高半区 VMA 基址：主映像物理地址 = vaddr - KERNEL_VMA_BASE
+// （与内核 physmap 映射 VA = BASE + phys 一致；不依赖 ELF 的 p_paddr，
+//  避免 ld 对 LMA 的对齐行为导致物理布局漂移）。引导区 vaddr 在低地址，
+//  物理地址即 vaddr 本身。
+#define KERNEL_VMA_BASE 0xFFFF800000000000ULL
+
+static UINT64 load_addr(UINT64 vaddr) {
+    return vaddr >= KERNEL_VMA_BASE ? vaddr - KERNEL_VMA_BASE : vaddr;
+}
+
 static UINT64 load_elf(VOID* elfData, UINT64 elfSize) {
     Elf64_Ehdr* ehdr = elfData;
     Elf64_Phdr* phdrs = (Elf64_Phdr*)((UINT8*)elfData + ehdr->e_phoff);
@@ -130,7 +140,7 @@ static UINT64 load_elf(VOID* elfData, UINT64 elfSize) {
     for (UINTN i = 0; i < ehdr->e_phnum; i++) {
         if (phdrs[i].p_type != PT_LOAD) continue;
         if (phdrs[i].p_memsz == 0) continue;
-        UINT64 segStart = phdrs[i].p_vaddr;
+        UINT64 segStart = load_addr(phdrs[i].p_vaddr);
         UINT64 segEnd   = segStart + phdrs[i].p_memsz;
         if (segStart < minAddr) minAddr = segStart;
         if (segEnd   > maxAddr) maxAddr = segEnd;
@@ -144,7 +154,7 @@ static UINT64 load_elf(VOID* elfData, UINT64 elfSize) {
     for (UINTN i = 0; i < ehdr->e_phnum; i++) {
         if (phdrs[i].p_type != PT_LOAD) continue;
         if (phdrs[i].p_memsz == 0) continue;
-        UINT64 dest = phdrs[i].p_vaddr;
+        UINT64 dest = load_addr(phdrs[i].p_vaddr);
         if (phdrs[i].p_filesz > 0) {
             memcpy((VOID*)dest, (UINT8*)elfData + phdrs[i].p_offset, phdrs[i].p_filesz);
         }

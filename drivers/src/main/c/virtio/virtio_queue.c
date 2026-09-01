@@ -1,5 +1,6 @@
 #include "virtio_queue.h"
 #include <stdint.h>
+#include "mem_layout.h"
 
 #ifdef __riscv
 #define VIRTIO_FENCE()   __asm__ volatile("fence w,o" ::: "memory")
@@ -13,9 +14,8 @@ int virtq_struct_size(void) {
     return (int)sizeof(virtq_t);
 }
 
-// 注意：desc_phys / avail_phys / used_phys 名为"物理地址"，实际是驱动
-// 传入的 Memory.malloc 虚拟地址——能工作全靠内核恒等映射（VA == PA）。
-// 将来上非恒等映射时必须先做 VA→PA 转换（见驱动侧注释）。
+// desc/avail/used 入参为物理地址（写 virtio 寄存器与 descriptor 用）；
+// 访问环内存经 physmap 映射为 VA。
 
 void virtq_init(virtq_t *q, uint64_t desc_phys, uint64_t avail_phys,
                 uint64_t used_phys, uint16_t queue_size) {
@@ -23,9 +23,9 @@ void virtq_init(virtq_t *q, uint64_t desc_phys, uint64_t avail_phys,
     q->avail_phys = avail_phys;
     q->used_phys  = used_phys;
     q->queue_size = queue_size;
-    q->desc  = (virtq_desc_t  *)(uint64_t)desc_phys;
-    q->avail = (virtq_avail_t *)(uint64_t)avail_phys;
-    q->used  = (virtq_used_t  *)(uint64_t)used_phys;
+    q->desc  = (virtq_desc_t  *)(uintptr_t)phys_to_virt(desc_phys);
+    q->avail = (virtq_avail_t *)(uintptr_t)phys_to_virt(avail_phys);
+    q->used  = (virtq_used_t  *)(uintptr_t)phys_to_virt(used_phys);
     q->last_used_idx = 0;
     q->free_desc = 0;
     q->queue_notify_off = 0;

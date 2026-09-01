@@ -1,13 +1,14 @@
 package kr.partix.kernel.paging;
 
 import kr.partix.kernel.memory.PageAllocator;
+import kr.partix.kernel.memory.MemoryLayout;
 import kr.partix.kernel.program.IProgram;
 import kr.partix.kernel.program.ProgramSegment;
 import kr.partix.kernel.sys.System;
 
 /**
  * 进程地址空间：独立的根页表 + 用户程序段/栈映射。
- * 内核恒等映射在 createAddressSpace 时克隆，用户页按 4KB 映射。
+ * 内核 physmap（高半区）在 createAddressSpace 时克隆，用户页按 4KB 映射。
  *
  * 段映射按 4KB 页合并：同一页被多个段占用时，权限取并集（如
  * .text 与 .rodata 同页时该页保持可执行），物理页复用，各段字节
@@ -19,15 +20,7 @@ class AddressSpace {
 
     /**
      * 用户态 framebuffer 映射基址（避开程序基址 0x400000、args 0x08000000
-     * 与用户栈 0x7FFFC000）。
-     *
-     * 注意：不能落在内核恒等映射会访问的 MMIO 窗口上。旧值 0x10000000 恰是
-     * JH7110 UART0（serial@10000000）所在的 2MB 大页——内核写串口控制台会在
-     * TLB 里缓存 U=0 的恒等大页项，用户态写 framebuffer 命中陈旧项 → 误报
-     * store page fault（scause 15，见 RISCVPageTableManager 的 TLB flush 注释）。
-     * 0x50000000 位于纯 DRAM 区间，无内核 MMIO 访问；其对应物理页已在
-     * PageAllocator 中 carve 保留，防止内核 heap 扩展取到同址物理页后经当前
-     * 进程页表写坏 fb 映射（与 0x400000 用户程序保留区同源问题）。
+     * 与用户栈 0x7FFFC000）。0x50000000 位于纯 DRAM 区间。
      */
     static final long USER_FB_BASE = 0x50000000L;
     /** 每屏预留 16MB 跨度，足以容纳 1080p×32bpp framebuffer（≈8.3MB）。 */
@@ -106,9 +99,9 @@ class AddressSpace {
     }
 
     /**
-     * 把第 screenId 块屏的 framebuffer 物理页映射进用户空间，返回用户基址
-     * framebuffer 不占 pageVaddrs 记账（程序段限制），直接 map4k
-     * 依赖内核恒等映射（fbPhys 即物理地址）
+     * 把第 screenId 块屏的 framebuffer 物理页映射进用户空间，返回用户基址。
+     * fbPhys 为物理地址（SysFbinfo 已从 getFramebuffer() 的 VA 转换）。
+     * framebuffer 不占 pageVaddrs 记账（程序段限制），直接 map4k。
      */
     long mapScreen(int screenId, long fbPhys, long fbSize) {
         if (screenId < 0 || screenId >= MAX_SCREENS) return -1;
@@ -140,8 +133,9 @@ class AddressSpace {
         while (len < 4095 && args[len] != (byte) 0) len += 1;
         long phys = PageAllocator.allocPage();
         if (phys == 0) return -1;
+        long virt = MemoryLayout.physToVirt(phys);
         for (int i = 0; i <= len; i += 1) {
-            System.write8(phys + i, args[i]);
+            System.write8(virt + i, args[i]);
         }
         ptm.map4k(root, USER_ARGS_BASE, phys,
                   PageFlags.USER | PageFlags.WRITABLE | PageFlags.NO_EXEC);
@@ -161,13 +155,14 @@ class AddressSpace {
         long segStart = seg.vaddr;
         long segEnd = seg.vaddr + seg.memsz;
         long pageEnd = pageStart + 4096;
+        long virt = MemoryLayout.physToVirt(phys);
         for (long addr = pageStart; addr < pageEnd; addr++) {
             if (addr >= segStart && addr < segEnd) {
                 long fileOff = addr - segStart;
                 if (fileOff < seg.filesz) {
-                    System.write8(phys + (addr - pageStart), data[(int) (seg.offset + fileOff)]);
+                    System.write8(virt + (addr - pageStart), data[(int) (seg.offset + fileOff)]);
                 } else {
-                    System.write8(phys + (addr - pageStart), (byte) 0);
+                    System.write8(virt + (addr - pageStart), (byte) 0);
                 }
             }
         }

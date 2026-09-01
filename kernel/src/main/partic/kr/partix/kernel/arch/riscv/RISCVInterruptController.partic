@@ -1,6 +1,7 @@
 package kr.partix.kernel.arch.riscv;
 
 import kr.partix.kernel.sys.System;
+import kr.partix.kernel.memory.MemoryLayout;
 import kr.partix.kernel.boot.BootFail;
 import kr.partix.kernel.interrupt.IInterruptController;
 import kr.partix.kernel.interrupt.IInterruptHandler;
@@ -47,11 +48,13 @@ class RISCVInterruptController implements IInterruptController {
     private extern long paging_read_stval();
 
     void init() {
-        plicBase = fdt_get_plic_base();
-        if (plicBase == 0) {
+        long base = fdt_get_plic_base();
+        if (base == 0) {
             // PLIC 是外部中断底座，地址必须来自设备树；缺失 = 环境不完整。
             BootFail.fail("no PLIC base (device tree unavailable)");
         }
+        // FDT 给的是物理地址，经 physmap 映射后访问
+        plicBase = MemoryLayout.physToVirt(base);
         ensurePlic();
         // UEFI/OpenSBI may leave a pending supervisor software interrupt;
         // clear it before interrupts open so it cannot fire once sie.SSIE is on.
@@ -182,7 +185,20 @@ class RISCVInterruptController implements IInterruptController {
                 KernelNullPointerFault.trigger(stval, epc, frame);
                 return 0;
             }
-            // 内核态其他地址的缺页：说明内核自身映射缺失，停机
+            // 内核态缺页：打印 faulting 地址/指令后停机（真机诊断用）
+            StrBuilder sb = new StrBuilder();
+            sb.append("[fault] kernel exc=");
+            str sc = StrUtils.longToStr(code);
+            sb.append(sc);
+            Memory.free(sc);
+            sb.append(" stval=0x");
+            sb.append(StrUtils.toHex(stval));
+            sb.append(" epc=0x");
+            sb.append(StrUtils.toHex(epc));
+            str msg = sb.build();
+            BspKrMain.arch.getUart().println(msg);
+            Memory.free(msg);
+            sb.dispose();
             BootFail.fail("kernel page fault");
         }
 

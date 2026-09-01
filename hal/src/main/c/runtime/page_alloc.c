@@ -5,11 +5,13 @@
 // regions, ...) are marked occupied. The bitmap's own storage is carved
 // from the head of the first free range and marked occupied.
 //
-// Both targets identity-map physical memory, so page addresses are used
-// directly (no page-table work needed to touch a page).
+// 物理页地址由接口对外返回（page_alloc/page_alloc_contig/page_free 的参数
+// 与返回值均为物理地址）；bitmap 存储位于低地址物理页，须经 physmap 映射
+// 为 VA 后访问。
 
 #include "page_alloc.h"
 #include <stdint.h>
+#include "mem_layout.h"
 
 #define PAGE_SIZE 4096
 
@@ -61,7 +63,8 @@ void page_alloc_init(const uint64_t *ranges, int count) {
         }
     }
     if (bm_idx < 0) return;  // no range big enough for the bitmap
-    bitmap = (uint8_t *)(uintptr_t)ranges[bm_idx * 2];
+    // ranges 里存的是物理地址；bitmap 自身须经 physmap 映射访问
+    bitmap = (uint8_t *)(uintptr_t)phys_to_virt(ranges[bm_idx * 2]);
 
     // Default occupied; clear the free ranges.
     for (uint64_t i = 0; i < bm_bytes; i++) bitmap[i] = 0xFF;

@@ -1,6 +1,7 @@
 package kr.partix.kernel.sched;
 
 import kr.partix.kernel.memory.PageAllocator;
+import kr.partix.kernel.memory.MemoryLayout;
 import kr.partix.kernel.process.Process;
 
 /**
@@ -39,7 +40,7 @@ class Thread {
         this.exitCode = -1;
         this.sleepWakeTick = 0;
 
-        long kstack = PageAllocator.allocPages(KERNEL_STACK_PAGES);
+        long kstack = MemoryLayout.physToVirt(PageAllocator.allocPages(KERNEL_STACK_PAGES));
         this.kernelStackTop = kstack + (long) KERNEL_STACK_PAGES * 4096;
 
         long savedSp;

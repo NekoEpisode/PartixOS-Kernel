@@ -1,5 +1,6 @@
 #include <stdint.h>
 #include "include/fdt.h"
+#include "../runtime/mem_layout.h"
 
 uint32_t* gop_framebuffer;
 uint64_t gop_width, gop_height, gop_stride;
@@ -32,19 +33,22 @@ long trap_dispatch(uint64_t cause, uint64_t epc, void* frame) {
 }
 
 void kernel_entry(BootInfo* info) {
+    // BootInfo 在 bootloader 栈上（物理地址）；经 physmap 映射访问
+    // （引导表含 physmap，规范表亦然，映射一致）。
     if (info) {
+        BootInfo* vi = (BootInfo*)(uintptr_t)phys_to_virt((uintptr_t)info);
         // 无 GOP 时 framebuffer 为 0，width/height/stride 不赋值（保持 0），
         // 防止 bootloader 栈垃圾传播到 gop_* 全局。
-        if (info->framebuffer) {
-            gop_framebuffer = info->framebuffer;
-            gop_width  = info->width;
-            gop_height = info->height;
-            gop_stride = info->stride;
+        if (vi->framebuffer) {
+            gop_framebuffer = vi->framebuffer;
+            gop_width  = vi->width;
+            gop_height = vi->height;
+            gop_stride = vi->stride;
         }
-        uefi_mmap_addr = info->memoryMap;
-        uefi_mmap_size = info->memoryMapSize;
-        uefi_mmap_desc_size = info->memoryMapDescriptorSize;
-        fdt_addr = info->fdt_addr;
+        uefi_mmap_addr = vi->memoryMap;
+        uefi_mmap_size = vi->memoryMapSize;
+        uefi_mmap_desc_size = vi->memoryMapDescriptorSize;
+        fdt_addr = vi->fdt_addr;
     }
 
     extern void _start(void);

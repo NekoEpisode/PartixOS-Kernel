@@ -3,9 +3,21 @@ package kr.partix.kernel.arch.riscv;
 import kr.partix.kernel.sys.System;
 import lang.partic.stdlib.core.memory.Memory;
 import kr.partix.kernel.memory.BootData;
+import kr.partix.kernel.memory.MemoryLayout;
 import kr.partix.kernel.paging.IPageTableManager;
 import kr.partix.kernel.paging.PageFlags;
 
+/**
+ * RISC-V（SV39）页表管理器。
+ *
+ * 内核根页表只含 physmap（KERNEL_PHYS_BASE + phys，2MB 大页，pgd 槽 256 起）：
+ * 内核高半区运行，低地址（identity）不再映射——用户空间独占低区（bit38=0），
+ * 内核高区（bit38=1）经 physmap 访问物理内存，二者在虚拟地址上隔离。
+ *
+ * SV39 PTE：表项内容为物理地址（ppn 字段，>>2 存储）；表指针本身是堆 VA。
+ * 写入表项用 virtToPhys()，从表项取下一级表指针用 physToVirt()，satp 用物理。
+ * 叶子判断：R|W|X 任一置位即叶子（QEMU cpu_helper.c 同规则）。
+ */
 class RISCVPageTableManager implements IPageTableManager {
     private extern void paging_load_satp(long satp);
     private extern void paging_flush_tlb();
@@ -24,6 +36,8 @@ class RISCVPageTableManager implements IPageTableManager {
     private static final long PTE_D = 128;
 
     private static final long SATP_MODE_SV39 = 8L << 60;
+    /** PTE 中物理地址（PPN）字段掩码（bit 9:0 为标志位）。 */
+    private static final long PTE_ADDR_MASK = ~0x3FFL;
 
     private long pgd;
     private long activeRoot = -1;
@@ -39,47 +53,35 @@ class RISCVPageTableManager implements IPageTableManager {
 
     void init() {
         pgd = allocZeroPage();
-        buildIdentityMap();
-        protectNullPage();
-        activeRoot = pgd;
+        buildKernelMap();
     }
 
-    private void buildIdentityMap() {
+    /**
+     * 内核根页表：physmap（KERNEL_PHYS_BASE + phys，2MB 大页，pgd 槽 256 起）。
+     * 覆盖低 4GB 物理（实际 RAM + 常见 MMIO：UART/PLIC/ECAM/DWMMC 均在此范围）。
+     */
+    private void buildKernelMap() {
         long maxPhys = findMaxPhys();
         if (maxPhys == 0) return;
-        // GOP framebuffer 可能位于 DRAM 之外的显存窗口（如 JH7110 0xFE000000）
-        // 内核恒等映射必须覆盖它，否则用户态映射 framebuffer 后访问 #PF
-        long fbEnd = gopFbEnd();
-        if (fbEnd > maxPhys) maxPhys = fbEnd;
-        if (maxPhys < 0x8000000000L) maxPhys = 0x8000000000L;
+        if (maxPhys < 0x100000000L) maxPhys = 0x100000000L;
 
         int pmdCount = (int)((maxPhys + 0x3FFFFFFF) / 0x40000000);
         if (pmdCount < 1) pmdCount = 1;
-        if (pmdCount > 512) pmdCount = 512;
+        if (pmdCount > 255) pmdCount = 255;   // 内核区 256GB 上限内
 
+        int pmSlot = 256;   // SV39 内核区 pgd 槽起点（bit38=1）
         for (int gb = 0; gb < pmdCount; gb++) {
             long pmd = allocZeroPage();
-            System.write64(pgd + (long)gb * 8, (pmd >> 2) | PTE_V);
+            System.write64(pgd + (long)(pmSlot + gb) * 8,
+                    (MemoryLayout.virtToPhys(pmd) >> 2) | PTE_V);
 
             for (int mb = 0; mb < 512; mb++) {
                 long phys = (long)gb * 0x40000000 + (long)mb * 0x200000;
                 if (phys > maxPhys) break;
-
-                long entry = (phys >> 2) | PTE_V | PTE_R | PTE_W | PTE_X |
-                             PTE_A | PTE_D;
+                long entry = (phys >> 2) | PTE_V | PTE_R | PTE_W | PTE_X | PTE_A | PTE_D;
                 System.write64(pmd + (long)mb * 8, entry);
             }
         }
-    }
-
-    /** GOP framebuffer 物理地址上限（gop_framebuffer + size）；无 GOP 返回 0。 */
-    private static long gopFbEnd() {
-        long fb = gop_framebuffer;
-        if (fb == 0) return 0;
-        long stride = gop_stride;
-        long h = gop_height;
-        if (stride == 0 || h == 0) return fb + 0x100000;  // 保守 1MB
-        return fb + stride * h;
     }
 
     void map(long virt, long phys, long size, int flags) {
@@ -93,15 +95,13 @@ class RISCVPageTableManager implements IPageTableManager {
         int mbIndex = (int)((virt % 0x40000000) / 0x200000);
 
         long pgdEntry = System.read64(pgd + (long)pmdIndex * 8);
-        long pmd = (pgdEntry & ~0x3FF) << 2;
+        long pmd = MemoryLayout.physToVirt((pgdEntry & PTE_ADDR_MASK) << 2);
         System.write64(pmd + (long)mbIndex * 8, entry);
-        // 页表修改后必须刷 TLB：否则用户态访问可能命中陈旧翻译（如恒等映射
-        // 的 2MB U=0 大页项）→ 误报 store page fault（scause 15）
         paging_flush_tlb();
     }
 
     void load() {
-        long satp = SATP_MODE_SV39 | (pgd >> 12);
+        long satp = SATP_MODE_SV39 | (MemoryLayout.virtToPhys(pgd) >> 12);
         paging_load_satp(satp);
         activeRoot = pgd;
     }
@@ -110,16 +110,17 @@ class RISCVPageTableManager implements IPageTableManager {
 
     long createAddressSpace() {
         long root = allocZeroPage();
-        // 克隆内核 pgd 槽：为每个在用槽分配新 pmd 表并拷贝项（内核恒等映射）。
+        // 克隆内核 pgd 槽（physmap：256 起，为每个在用槽分配 pmd 表并拷贝）。
         for (int i = 0; i < 512; i++) {
             long pgdEntry = System.read64(pgd + (long)i * 8);
             if (pgdEntry == 0) continue;
-            long srcPmd = (pgdEntry & ~0x3FFL) << 2;
+            long srcPmd = MemoryLayout.physToVirt((pgdEntry & PTE_ADDR_MASK) << 2);
             long dstPmd = allocZeroPage();
             for (int j = 0; j < 512; j++) {
                 System.write64(dstPmd + (long)j * 8, System.read64(srcPmd + (long)j * 8));
             }
-            System.write64(root + (long)i * 8, (dstPmd >> 2) | (pgdEntry & 0x3FFL));
+            System.write64(root + (long)i * 8,
+                    (MemoryLayout.virtToPhys(dstPmd) >> 2) | (pgdEntry & 0x3FFL));
         }
         return root;
     }
@@ -138,17 +139,19 @@ class RISCVPageTableManager implements IPageTableManager {
         long pmd;
         if ((pgdEntry & PTE_V) == 0) {
             pmd = allocZeroPage();
-            System.write64(root + (long)pgdIndex * 8, (pmd >> 2) | PTE_V);
+            System.write64(root + (long)pgdIndex * 8,
+                    (MemoryLayout.virtToPhys(pmd) >> 2) | PTE_V);
         } else {
-            pmd = (pgdEntry & ~0x3FFL) << 2;
+            pmd = MemoryLayout.physToVirt((pgdEntry & PTE_ADDR_MASK) << 2);
         }
 
         long pmdEntry = System.read64(pmd + (long)pmdIndex * 8);
         long pteTable;
         if ((pmdEntry & PTE_V) == 0) {
             pteTable = allocZeroPage();
-            System.write64(pmd + (long)pmdIndex * 8, (pteTable >> 2) | PTE_V);
-        } else if ((pmdEntry & (PTE_R | PTE_X)) != 0) {
+            System.write64(pmd + (long)pmdIndex * 8,
+                    (MemoryLayout.virtToPhys(pteTable) >> 2) | PTE_V);
+        } else if ((pmdEntry & (PTE_R | PTE_W | PTE_X)) != 0) {
             // 2MB 叶子大页 → 拆成 4KB PTE 表，保留原有映射
             pteTable = allocZeroPage();
             long physBase = (pmdEntry >> 10) << 12;
@@ -157,13 +160,13 @@ class RISCVPageTableManager implements IPageTableManager {
                 System.write64(pteTable + (long)i * 8,
                         ((physBase + (long)i * 4096) >> 2) | baseFlags);
             }
-            System.write64(pmd + (long)pmdIndex * 8, (pteTable >> 2) | PTE_V);
+            System.write64(pmd + (long)pmdIndex * 8,
+                    (MemoryLayout.virtToPhys(pteTable) >> 2) | PTE_V);
         } else {
-            pteTable = (pmdEntry & ~0x3FFL) << 2;
+            pteTable = MemoryLayout.physToVirt((pmdEntry & PTE_ADDR_MASK) << 2);
         }
 
         System.write64(pteTable + (long)pteIndex * 8, entry);
-        // 见 map()：PTE 写入后必须刷 TLB，否则陈旧翻译会让 U-mode 访问误报 #PF
         paging_flush_tlb();
     }
 
@@ -174,18 +177,18 @@ class RISCVPageTableManager implements IPageTableManager {
 
         long pgdEntry = System.read64(root + (long)pgdIndex * 8);
         if ((pgdEntry & PTE_V) == 0) return;
-        long pmd = (pgdEntry & ~0x3FFL) << 2;
+        long pmd = MemoryLayout.physToVirt((pgdEntry & PTE_ADDR_MASK) << 2);
         long pmdEntry = System.read64(pmd + (long)pmdIndex * 8);
         if ((pmdEntry & PTE_V) == 0) return;
-        if ((pmdEntry & (PTE_R | PTE_X)) != 0) return;  // 2MB 大页，不按 4KB 拆
-        long pteTable = (pmdEntry & ~0x3FFL) << 2;
+        if ((pmdEntry & (PTE_R | PTE_W | PTE_X)) != 0) return;  // 2MB 大页，不按 4KB 拆
+        long pteTable = MemoryLayout.physToVirt((pmdEntry & PTE_ADDR_MASK) << 2);
         System.write64(pteTable + (long)pteIndex * 8, 0);
         paging_flush_tlb();
     }
 
     void loadRoot(long root) {
         if (root == activeRoot) return;
-        long satp = SATP_MODE_SV39 | (root >> 12);
+        long satp = SATP_MODE_SV39 | (MemoryLayout.virtToPhys(root) >> 12);
         paging_load_satp(satp);
         activeRoot = root;
     }
@@ -194,9 +197,10 @@ class RISCVPageTableManager implements IPageTableManager {
         long max = 0;
         long descSize = BootData.getDescSize();
         int count = (int)(BootData.getMmapSize() / descSize);
+        long mmapV = MemoryLayout.physToVirt(BootData.getMmapAddr());
 
         for (int i = 0; i < count; i++) {
-            long base = BootData.getMmapAddr() + (long)i * descSize;
+            long base = mmapV + (long)i * descSize;
             long physStart = System.read64(base + 8);
             long pages = System.read64(base + 24);
             long end = physStart + pages * 4096;
@@ -205,22 +209,13 @@ class RISCVPageTableManager implements IPageTableManager {
         return max;
     }
 
-    /**
-     * 把第一 2MB 大页（0x0-0x200000）拆成 4KB 页，0x0-0xFFF 不可访问。
-     * 空指针访问将触发 Page Fault（scause 13/15），由
-     * RISCVInterruptController 转换为 KernelNullPointerException。
-     */
-    private void protectNullPage() {
-        long pgdEntry = System.read64(pgd);
-        long pmd = ((pgdEntry & 0xFFFFFFFFFFFFFC00L) << 2);
-        long pteTable = allocZeroPage();
-        // pmd[0]：从 2MB 大页项改为指向 4KB pte 表（无大页标志）
-        System.write64(pmd, (pteTable >> 2) | PTE_V);
-        for (int i = 1; i < 512; i++) {
-            long phys = (long)i * 4096;
-            System.write64(pteTable + (long)i * 8,
-                    (phys >> 2) | PTE_V | PTE_R | PTE_W | PTE_X | PTE_A | PTE_D);
-        }
-        // pte[0] 保持 0（allocZeroPage 清零）→ 0x0-0xFFF 不可访问
+    /** GOP framebuffer 物理地址上限（gop_framebuffer + size）；无 GOP 返回 0。 */
+    private static long gopFbEnd() {
+        long fb = gop_framebuffer;
+        if (fb == 0) return 0;
+        long stride = gop_stride;
+        long h = gop_height;
+        if (stride == 0 || h == 0) return fb + 0x100000;  // 保守 1MB
+        return fb + stride * h;
     }
 }

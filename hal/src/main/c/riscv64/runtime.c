@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include "../runtime/timer_config.h"
 #include "../runtime/allocator.h"
+#include "../runtime/mem_layout.h"
 
 // Heap region for the slab allocator (runtime/allocator.c).
 // The bump region is a bootstrap area; the page allocator extends the heap
@@ -8,12 +9,11 @@
 uint64_t kr_heap_start = 0x81000000;
 uint64_t kr_heap_end  = 0x82000000;
 
-// Kernel image span (linker symbols __kernel_image_start/end): occupied
-// physical memory the page allocator must not hand out.
-extern char __kernel_image_start[];
+// 内核物理占用区间（引导区 0x80200000 起，到主映像 BSS 末端）：页分配器不可分配。
+extern char __kernel_phys_base[];
 extern char __kernel_image_end[];
-uint64_t kr_image_start = (uint64_t)__kernel_image_start;
-uint64_t kr_image_end   = (uint64_t)__kernel_image_end;
+uint64_t kr_image_start = (uint64_t)__kernel_phys_base;
+uint64_t kr_image_end   = (uint64_t)__kernel_image_end - KERNEL_PHYS_BASE;
 
 // Boot stack region: no-op on RISC-V (the boot stack is in the image .bss).
 uint64_t kr_stack_bottom = 0;
@@ -86,6 +86,7 @@ void sys_arch_unprotect(unsigned int lev) { (void)lev; }
 // JH7110 L2 cache 控制器 flush（移植自 starfive-u-boot arch/riscv/cpu/jh7110/cache.c）
 // JH7110 无 Zicbom cbo.clean，改走 L2 控制器 MMIO：往 0x2010200 写 cache line 地址即回写该行。
 // GOP framebuffer 直映写后必须调用，否则显示控制器读 DRAM 是 cache 里的旧数据。
+// 入参 addr 为 physmap VA；L2 控制器寄存器与写入值都是物理地址。
 #define L2_CACHE_FLUSH64    0x200
 #define L2_CACHE_BASE_ADDR  0x2010000
 #define CACHELINE_SIZE      64
@@ -93,10 +94,12 @@ void sys_arch_unprotect(unsigned int lev) { (void)lev; }
 void cache_clean_range(uint64_t addr, uint64_t size) {
     if (size == 0) return;
     volatile unsigned long *flush64 =
-        (volatile unsigned long *)(L2_CACHE_BASE_ADDR + L2_CACHE_FLUSH64);
+        (volatile unsigned long *)(uintptr_t)
+            phys_to_virt(L2_CACHE_BASE_ADDR + L2_CACHE_FLUSH64);
     __asm__ volatile("fence iorw, iorw" ::: "memory");
-    uint64_t line = addr & ~(uint64_t)(CACHELINE_SIZE - 1);
-    uint64_t end = addr + size;
+    uint64_t phys = addr - KERNEL_PHYS_BASE;
+    uint64_t line = phys & ~(uint64_t)(CACHELINE_SIZE - 1);
+    uint64_t end = phys + size;
     for (; line < end; line += CACHELINE_SIZE) {
         *flush64 = line;
         __asm__ volatile("fence iorw, iorw" ::: "memory");

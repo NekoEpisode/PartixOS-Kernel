@@ -1,5 +1,7 @@
 package kr.partix.kernel.io.pci;
 
+import kr.partix.kernel.memory.MemoryLayout;
+
 /**
  * virtio over PCI 传输的公共发现逻辑（virtio-gpu / virtio-input 共用）。
  * 扫描 BAR、遍历 capability，定位 common/notify/isr/device 四个配置区。
@@ -12,7 +14,7 @@ class VirtioPCISetup {
     private static final int CAP_ISR    = 3;
     private static final int CAP_DEVICE = 4;
 
-    /** 定位四个配置区 MMIO 地址；未找到的字段为 0。 */
+    /** 定位四个配置区 MMIO 地址（经 physmap 映射为 VA）；未找到的字段为 0。 */
     static CapAddrs locate(IPCIIO pciio, int bus, int slot, int func) {
         long[] barBases = new long[6];
         int bi = 0;
@@ -48,10 +50,11 @@ class VirtioPCISetup {
             long bar    = barBases[barId];
 
             if (capId == CAP_VENDOR) {
-                if (cfgType == CAP_COMMON) out.common = bar + offset;
-                if (cfgType == CAP_NOTIFY) out.notify = bar + offset;
-                if (cfgType == CAP_ISR)    out.isr    = bar + offset;
-                if (cfgType == CAP_DEVICE) out.device = bar + offset;
+                long mmio = MemoryLayout.physToVirt(bar) + offset;
+                if (cfgType == CAP_COMMON) out.common = mmio;
+                if (cfgType == CAP_NOTIFY) out.notify = mmio;
+                if (cfgType == CAP_ISR)    out.isr    = mmio;
+                if (cfgType == CAP_DEVICE) out.device = mmio;
             }
             cap = capNext;
         }

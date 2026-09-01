@@ -3,6 +3,7 @@ package kr.partix.kernel.io.drivers.storage.dwmmc;
 import kr.partix.kernel.device.IDevice;
 import kr.partix.kernel.io.drivers.storage.platform.Jh7110Platform;
 import kr.partix.kernel.log.StartupLogger;
+import kr.partix.kernel.memory.MemoryLayout;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.timer.Timer;
 import lang.partic.stdlib.additional.utils.StrBuilder;
@@ -51,7 +52,8 @@ class DwMmcImpl {
         if (dev.getResourceCount() > 0) {
             addr = dev.getResource(0).start;
         }
-        base = addr;
+        // FDT 给的是物理地址，经 physmap 映射后访问
+        base = addr == 0 ? 0 : MemoryLayout.physToVirt(addr);
         if (base == 0) return;
 
         Jh7110Platform.enableClock();
@@ -681,9 +683,10 @@ class DwMmcImpl {
 
         sb = new StrBuilder();
         sb.append("dwmmc: clk AHB=");
-        appendHex(sb, System.read32(Jh7110Platform.SDIO1_CLK_AHB));
+        // 时钟寄存器常量是物理地址，经 physmap 映射后访问
+        appendHex(sb, System.read32(MemoryLayout.physToVirt(Jh7110Platform.SDIO1_CLK_AHB)));
         sb.append(" SDCARD=");
-        appendHex(sb, System.read32(Jh7110Platform.SDIO1_CLK_SDCARD));
+        appendHex(sb, System.read32(MemoryLayout.physToVirt(Jh7110Platform.SDIO1_CLK_SDCARD)));
         log(sb);
     }
 

@@ -19,6 +19,7 @@
 
 #include "allocator.h"
 #include "page_alloc.h"
+#include "mem_layout.h"
 
 #define HEADER_SIZE   16
 #define PAGE_SIZE     4096
@@ -48,9 +49,10 @@ static uint64_t align16(uint64_t v) { return (v + 15) & ~15ULL; }
 
 static void alloc_init(void) {
     if (inited) return;
-    page_start = align16(kr_heap_start);
+    // kr_heap_start/end 是物理地址；堆内块地址一律使用 physmap VA。
+    page_start = align16(kr_heap_start) + KERNEL_PHYS_BASE;
     page_next = page_start;
-    page_end = kr_heap_end;
+    page_end = kr_heap_end + KERNEL_PHYS_BASE;
     for (int i = 0; i < CLASS_COUNT; i++) free_lists[i] = 0;
     inited = 1;
 }
@@ -83,8 +85,9 @@ static uint64_t slab_carve(int ci) {
         return block;
     }
     if (!ext_page || ext_page_off + need > PAGE_SIZE) {
-        ext_page = page_alloc();
-        if (!ext_page) return 0;  // heap exhausted
+        ext_page = page_alloc();          // 物理页 → physmap VA
+        if (!ext_page) return 0;          // heap exhausted
+        ext_page += KERNEL_PHYS_BASE;
         ext_page_off = 0;
     }
     uint64_t block = ext_page + ext_page_off;
@@ -119,8 +122,9 @@ uint64_t kr_alloc(uint64_t size) {
         block = page_next;
         page_next += pages * PAGE_SIZE;
     } else {
-        block = page_alloc_contig((int)pages);
+        block = page_alloc_contig((int)pages);   // 物理页 → physmap VA
         if (!block) return 0;
+        block += KERNEL_PHYS_BASE;
     }
     ((uint64_t *)block)[0] = BIG_MAGIC;
     ((uint64_t *)block)[1] = pages;
@@ -137,7 +141,8 @@ void kr_dealloc(uint64_t addr) {
         uint64_t pages = ((uint64_t *)block)[1];
         // Bump-region pages are reserved in the page allocator, so
         // page_free on them is a safe no-op; extension pages are returned.
-        for (uint64_t i = 0; i < pages; i++) page_free(block + i * PAGE_SIZE);
+        for (uint64_t i = 0; i < pages; i++)
+            page_free(block + i * PAGE_SIZE - KERNEL_PHYS_BASE);
         big_outstanding--;
         return;
     }

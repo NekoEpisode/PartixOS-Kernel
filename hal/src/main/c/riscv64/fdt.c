@@ -1,4 +1,5 @@
 #include "include/fdt.h"
+#include "../runtime/mem_layout.h"
 
 static fdt_header_t  *fdt_header;
 static const char    *fdt_strings;
@@ -81,15 +82,16 @@ void fdt_init(void *fdt_ptr) {
 
     if (!fdt_ptr) return;
 
-    // FDT 是大端存储：header 字段必须逐字节大端读（be32），
-    // 不能直接解引用结构体字段——小端机器上 magic 会读成字节交换值，
-    // 偏移字段会读出放大 2^24 倍的错误值。
-    const uint8_t *base = (const uint8_t *)fdt_ptr;
+    // fdt_ptr 是物理地址；内核运行于高半区，经 physmap 映射访问。
+    // （引导期引导表同样含 physmap，映射一致。）
+    // FDT 是大端存储：header 字段必须逐字节大端读（be32），不能直接解引用
+    // 结构体字段——小端机器上 magic 会读成字节交换值，偏移字段会放大 2^24 倍。
+    const uint8_t *base = (const uint8_t *)(uintptr_t)phys_to_virt((uintptr_t)fdt_ptr);
     if (be32(base) != FDT_MAGIC) return;
     uint32_t version = be32(base + 20);
     if (version < 16) return;
 
-    fdt_header = (fdt_header_t *)fdt_ptr;   // 仅 fdt_get_base() 返回用
+    fdt_header = (fdt_header_t *)(uintptr_t)phys_to_virt((uintptr_t)fdt_ptr);
     // FDT header 字段偏移：magic 0, totalsize 4, off_dt_struct 8,
     // off_dt_strings 12, off_mem_rsvmap 16, version 20, ...,
     // size_dt_strings 32, size_dt_struct 36

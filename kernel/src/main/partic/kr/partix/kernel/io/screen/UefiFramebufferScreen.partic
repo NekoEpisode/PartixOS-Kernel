@@ -2,6 +2,7 @@ package kr.partix.kernel.io.screen;
 
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.sys.ReturnCode;
+import kr.partix.kernel.memory.MemoryLayout;
 
 class UefiFramebufferScreen implements IScreen {
     private extern long gop_framebuffer;
@@ -26,10 +27,10 @@ class UefiFramebufferScreen implements IScreen {
     /** GOP framebuffer 大小（供 GopDevice 资源描述使用）。 */
     static long gopSize() -> gop_height * gop_stride
 
-    int* getFramebuffer() -> (int*) gop_framebuffer
+    int* getFramebuffer() -> (int*) MemoryLayout.physToVirt(gop_framebuffer)
 
     void blt(int* src, long x, long y, long w, long h) {
-        long fb = gop_framebuffer;
+        long fb = MemoryLayout.physToVirt(gop_framebuffer);
         long stride = gop_stride;
         if (fb == 0) return;
 
@@ -49,7 +50,7 @@ class UefiFramebufferScreen implements IScreen {
      *  riscv JH7110：写 L2 控制器 flush 寄存器（无 cbo.clean）；
      *  x86：clflush。 */
     void flush(long x, long y, long w, long h) {
-        long fb = gop_framebuffer;
+        long fb = MemoryLayout.physToVirt(gop_framebuffer);
         long stride = gop_stride;
         if (fb == 0 || w <= 0 || h <= 0) return;
         long xoff = x * 4;

@@ -12,6 +12,8 @@ HAL_CFLAGS_BASE = [
     "--target=x86_64-unknown-none",
     "-ffreestanding", "-nostdlib", "-mno-red-zone",
     "-mgeneral-regs-only", "-funwind-tables",
+    # 内核链接在高半区，默认 small model 的 32 位绝对重定位会溢出
+    "-mcmodel=large",
 ]
 
 
@@ -61,6 +63,7 @@ class X86_64HalBuilder(Builder):
             if "partic_eh_dwarf" in str(src_rel):
                 cc = "gcc"
                 eh_flags = ["-ffreestanding", "-nostdlib", "-mno-red-zone"]
+                eh_flags += ["-mcmodel=large", "-fno-pie"]
                 eh_flags += ["-O0", "-g"] if self._debug else ["-O2"]
                 cmd = [cc, *eh_flags, "-c", str(src_abs), "-o", str(obj)]
             else:

@@ -3,9 +3,21 @@ package kr.partix.kernel.arch.x86;
 import kr.partix.kernel.sys.System;
 import lang.partic.stdlib.core.memory.Memory;
 import kr.partix.kernel.memory.BootData;
+import kr.partix.kernel.memory.MemoryLayout;
 import kr.partix.kernel.paging.IPageTableManager;
 import kr.partix.kernel.paging.PageFlags;
 
+/**
+ * x86-64 页表管理器。
+ *
+ * 内核根页表只含 physmap（KERNEL_PHYS_BASE + phys，2MB 大页，PML4[256] 起）：
+ * 内核高半区运行，低地址（identity）不再映射——内核访问物理内存一律经
+ * physmap 转换（physToVirt），未映射地址访问直接 #PF（空指针页 0 天然不可访问）。
+ *
+ * 页表本身分配自内核堆（VA），但页表项内容必须是物理地址：
+ * 写入表项用 virtToPhys()，从表项取下一级表指针用 physToVirt()，
+ * CR3 装载用 virtToPhys(root)。
+ */
 class X86PageTableManager implements IPageTableManager {
     private extern void paging_load_cr3(long cr3);
     private extern void paging_flush_tlb();
@@ -14,6 +26,7 @@ class X86PageTableManager implements IPageTableManager {
     private static final long PML4E_RW       = 2;
     private static final long PDE_PS_2MB     = 0x80;
     private static final long PDE_NX         = 0x8000000000000000L;
+    private static final long ADDR_MASK      = 0x000FFFFFFFFFF000L;
 
     private long pml4;
     private long activeRoot = -1;
@@ -29,23 +42,30 @@ class X86PageTableManager implements IPageTableManager {
 
     void init() {
         pml4 = allocZeroPage();
-        buildIdentityMap();
-        protectNullPage();
+        buildKernelMap();
     }
 
-    private void buildIdentityMap() {
+    /**
+     * 内核根页表：physmap（KERNEL_PHYS_BASE + phys，2MB 大页，PML4[256] 起）。
+     * 覆盖低 4GB 物理（实际 RAM + 常见 MMIO：PCI hole 0xE0000000+、APIC、
+     * framebuffer）；更大的 MMIO 窗口后续按需扩展。
+     */
+    private void buildKernelMap() {
         long maxPhys = findMaxPhys();
         if (maxPhys == 0) return;
-        if (maxPhys < 0x10000000000L) maxPhys = 0x10000000000L;
+        if (maxPhys < 0x100000000L) maxPhys = 0x100000000L;
 
         int pdCount = (int)((maxPhys + 0x3FFFFFFF) / 0x40000000);
         if (pdCount < 1) pdCount = 1;
+        if (pdCount > 512) pdCount = 512;
 
         int pdptCount = (pdCount + 511) / 512;
 
+        int pmSlot = 256;
         for (int pi = 0; pi < pdptCount; pi++) {
             long pdpt = allocZeroPage();
-            System.write64(pml4 + (long)pi * 8, pdpt | PML4E_PRESENT | PML4E_RW);
+            System.write64(pml4 + (long)(pmSlot + pi) * 8,
+                    MemoryLayout.virtToPhys(pdpt) | PML4E_PRESENT | PML4E_RW);
 
             int gbStart = pi * 512;
             int gbEnd = (pi + 1) * 512;
@@ -54,7 +74,8 @@ class X86PageTableManager implements IPageTableManager {
             for (int gb = gbStart; gb < gbEnd; gb++) {
                 long pd = allocZeroPage();
                 int slot = gb - gbStart;
-                System.write64(pdpt + (long)slot * 8, pd | PML4E_PRESENT | PML4E_RW);
+                System.write64(pdpt + (long)slot * 8,
+                        MemoryLayout.virtToPhys(pd) | PML4E_PRESENT | PML4E_RW);
 
                 for (int mb = 0; mb < 512; mb++) {
                     long phys = (long)gb * 0x40000000 + (long)mb * 0x200000;
@@ -74,16 +95,14 @@ class X86PageTableManager implements IPageTableManager {
         int pdIndex = (int)(virt / 0x40000000);
         int mbIndex = (int)((virt % 0x40000000) / 0x200000);
 
-        long pdBase = System.read64(pml4) & ~0xFFF;
-        long pd = System.read64(pdBase + (long)pdIndex * 8) & ~0xFFF;
+        long pdBase = MemoryLayout.physToVirt(System.read64(pml4) & ADDR_MASK);
+        long pd = MemoryLayout.physToVirt(System.read64(pdBase + (long)pdIndex * 8) & ADDR_MASK);
         System.write64(pd + (long)mbIndex * 8, entry);
-        // 页表修改后必须刷 TLB：否则用户态访问可能命中陈旧翻译（如恒等映射
-        // 的 2MB U/S=0 大页项）→ 误报 #PF（与 riscv 的 paging_flush_tlb 同源）
         paging_flush_tlb();
     }
 
     void load() {
-        paging_load_cr3(pml4);
+        paging_load_cr3(MemoryLayout.virtToPhys(pml4));
         activeRoot = pml4;
     }
 
@@ -91,11 +110,11 @@ class X86PageTableManager implements IPageTableManager {
 
     long createAddressSpace() {
         long root = allocZeroPage();
-        // 克隆内核 PML4 槽：深拷贝 PDPT + PD（1GB 大页原样共享）。
+        // 克隆内核 PML4 槽：深拷贝 PDPT + PD（大页叶子原样共享）。
         for (int i = 0; i < 512; i++) {
             long pml4e = System.read64(pml4 + (long)i * 8);
             if ((pml4e & PML4E_PRESENT) == 0) continue;
-            long srcPdpt = pml4e & 0xFFFFFFFFFFFFF000L;
+            long srcPdpt = MemoryLayout.physToVirt(pml4e & ADDR_MASK);
             long dstPdpt = allocZeroPage();
             for (int j = 0; j < 512; j++) {
                 long pdpte = System.read64(srcPdpt + (long)j * 8);
@@ -104,14 +123,16 @@ class X86PageTableManager implements IPageTableManager {
                     System.write64(dstPdpt + (long)j * 8, pdpte);
                     continue;
                 }
-                long srcPd = pdpte & 0xFFFFFFFFFFFFF000L;
+                long srcPd = MemoryLayout.physToVirt(pdpte & ADDR_MASK);
                 long dstPd = allocZeroPage();
                 for (int k = 0; k < 512; k++) {
                     System.write64(dstPd + (long)k * 8, System.read64(srcPd + (long)k * 8));
                 }
-                System.write64(dstPdpt + (long)j * 8, dstPd | (pdpte & 0xFFFL));
+                System.write64(dstPdpt + (long)j * 8,
+                        MemoryLayout.virtToPhys(dstPd) | (pdpte & 0xFFFL));
             }
-            System.write64(root + (long)i * 8, dstPdpt | (pml4e & 0xFFFL));
+            System.write64(root + (long)i * 8,
+                    MemoryLayout.virtToPhys(dstPdpt) | (pml4e & 0xFFFL));
         }
         return root;
     }
@@ -136,9 +157,9 @@ class X86PageTableManager implements IPageTableManager {
         if ((pml4e & PML4E_PRESENT) == 0) {
             pdpt = allocZeroPage();
             System.write64(root + (long)pml4Index * 8,
-                    pdpt | PML4E_PRESENT | PML4E_RW | pathUser);
+                    MemoryLayout.virtToPhys(pdpt) | PML4E_PRESENT | PML4E_RW | pathUser);
         } else {
-            pdpt = pml4e & 0xFFFFFFFFFFFFF000L;
+            pdpt = MemoryLayout.physToVirt(pml4e & ADDR_MASK);
             if (pathUser != 0 && (pml4e & 4) == 0) {
                 System.write64(root + (long)pml4Index * 8, pml4e | 4);
             }
@@ -149,9 +170,9 @@ class X86PageTableManager implements IPageTableManager {
         if ((pdpte & PML4E_PRESENT) == 0) {
             pd = allocZeroPage();
             System.write64(pdpt + (long)pdptIndex * 8,
-                    pd | PML4E_PRESENT | PML4E_RW | pathUser);
+                    MemoryLayout.virtToPhys(pd) | PML4E_PRESENT | PML4E_RW | pathUser);
         } else {
-            pd = pdpte & 0xFFFFFFFFFFFFF000L;
+            pd = MemoryLayout.physToVirt(pdpte & ADDR_MASK);
             if (pathUser != 0 && (pdpte & 4) == 0) {
                 System.write64(pdpt + (long)pdptIndex * 8, pdpte | 4);
             }
@@ -162,27 +183,26 @@ class X86PageTableManager implements IPageTableManager {
         if ((pde & PML4E_PRESENT) != 0 && (pde & PDE_PS_2MB) != 0) {
             // 2MB 叶子 → 拆成 4KB PTE 表，保留原有映射
             pt = allocZeroPage();
-            long physBase = pde & 0x000FFFFFFFFFF000L;
+            long physBase = pde & ADDR_MASK;
             long baseFlags = pde & 0xFFFL;
             for (int i = 0; i < 512; i++) {
                 System.write64(pt + (long)i * 8,
                         (physBase + (long)i * 4096) | (baseFlags & ~PDE_PS_2MB));
             }
             System.write64(pd + (long)pdIndex * 8,
-                    pt | PML4E_PRESENT | PML4E_RW | pathUser);
+                    MemoryLayout.virtToPhys(pt) | PML4E_PRESENT | PML4E_RW | pathUser);
         } else if ((pde & PML4E_PRESENT) != 0) {
-            pt = pde & 0xFFFFFFFFFFFFF000L;
+            pt = MemoryLayout.physToVirt(pde & ADDR_MASK);
             if (pathUser != 0 && (pde & 4) == 0) {
                 System.write64(pd + (long)pdIndex * 8, pde | 4);
             }
         } else {
             pt = allocZeroPage();
             System.write64(pd + (long)pdIndex * 8,
-                    pt | PML4E_PRESENT | PML4E_RW | pathUser);
+                    MemoryLayout.virtToPhys(pt) | PML4E_PRESENT | PML4E_RW | pathUser);
         }
 
         System.write64(pt + (long)ptIndex * 8, entry);
-        // 见 map()：PTE 写入后必须刷 TLB，否则陈旧翻译会让 U-mode 访问误报 #PF
         paging_flush_tlb();
     }
 
@@ -194,21 +214,21 @@ class X86PageTableManager implements IPageTableManager {
 
         long pml4e = System.read64(root + (long)pml4Index * 8);
         if ((pml4e & PML4E_PRESENT) == 0) return;
-        long pdpt = pml4e & 0xFFFFFFFFFFFFF000L;
+        long pdpt = MemoryLayout.physToVirt(pml4e & ADDR_MASK);
         long pdpte = System.read64(pdpt + (long)pdptIndex * 8);
         if ((pdpte & PML4E_PRESENT) == 0) return;
-        long pd = pdpte & 0xFFFFFFFFFFFFF000L;
+        long pd = MemoryLayout.physToVirt(pdpte & ADDR_MASK);
         long pde = System.read64(pd + (long)pdIndex * 8);
         if ((pde & PML4E_PRESENT) == 0) return;
         if ((pde & PDE_PS_2MB) != 0) return;   // 2MB 大页，不按 4KB 拆
-        long pt = pde & 0xFFFFFFFFFFFFF000L;
+        long pt = MemoryLayout.physToVirt(pde & ADDR_MASK);
         System.write64(pt + (long)ptIndex * 8, 0);
         paging_flush_tlb();
     }
 
     void loadRoot(long root) {
         if (root == activeRoot) return;
-        paging_load_cr3(root);
+        paging_load_cr3(MemoryLayout.virtToPhys(root));
         activeRoot = root;
     }
 
@@ -216,32 +236,15 @@ class X86PageTableManager implements IPageTableManager {
         long max = 0;
         long descSize = BootData.getDescSize();
         int count = (int)(BootData.getMmapSize() / descSize);
+        long mmapV = MemoryLayout.physToVirt(BootData.getMmapAddr());
 
         for (int i = 0; i < count; i++) {
-            long base = BootData.getMmapAddr() + (long)i * descSize;
+            long base = mmapV + (long)i * descSize;
             long physStart = System.read64(base + 8);
             long pages = System.read64(base + 24);
             long end = physStart + pages * 4096;
             if (end > max) max = end;
         }
         return max;
-    }
-
-    /**
-     * 把第一 2MB 大页（0x0-0x200000）拆成 4KB 页，0x0-0xFFF 不可访问。
-     * 空指针访问（读/写地址 0）将触发 Page Fault（#PF），由
-     * X86InterruptController 转换为 KernelNullPointerException。
-     */
-    private void protectNullPage() {
-        long pdpt = System.read64(pml4) & 0xFFFFFFFFFFFFF000L;
-        long pd = System.read64(pdpt) & 0xFFFFFFFFFFFFF000L;
-        long pteTable = allocZeroPage();
-        // pd[0]：从 2MB 大页项改为指向 4KB pte 表（去掉 PS 位）
-        System.write64(pd, (pteTable & 0xFFFFFFFFFFFFF000L) | PML4E_PRESENT | PML4E_RW);
-        for (int i = 1; i < 512; i++) {
-            long phys = (long)i * 4096;
-            System.write64(pteTable + (long)i * 8, phys | PML4E_PRESENT | PML4E_RW);
-        }
-        // pte[0] 保持 0（allocZeroPage 清零）→ 0x0-0xFFF 不可访问
     }
 }

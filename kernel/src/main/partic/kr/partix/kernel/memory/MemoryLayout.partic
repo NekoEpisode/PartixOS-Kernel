@@ -1,0 +1,41 @@
+package kr.partix.kernel.memory;
+
+import kr.partix.kernel.sys.System;
+
+/**
+ * 内核虚拟内存布局常量与 VA/PA 转换。
+ *
+ * 目标模型：高半区内核 + 物理直接映射（physmap）。
+ * 内核映像/堆/页表全部位于 KERNEL_PHYS_BASE + phys，用户空间独占低半区，
+ * 二者在虚拟地址上天然不相交 —— 恒等映射（VA==PA）下的"内核物理页
+ * 同时是用户合法 VA"问题从结构上消失。
+ *
+ * 转换约定（迁移后全局唯一入口）：
+ *   - 物理地址 → 可解引用地址：physToVirt()；裸物理地址只允许进入
+ *     PTE 表项或 DMA 描述符，绝不能直接读写。
+ *   - 内核虚拟地址 → 物理地址：virtToPhys()；只在需要物理语义的场合用
+ *     （PTE 编码、DMA 描述符、riscv JH7110 L2 flush）。
+ *
+ * 注意：本文件常量与 C 侧 hal/src/main/c/runtime/mem_layout.h 必须保持一致。
+ */
+class MemoryLayout {
+    private MemoryLayout() {}
+
+    /** x86_64：内核 physmap 基址（48-bit 高半区起点 0xFFFF800000000000）。 */
+    private static final long X86_KERNEL_PHYS_BASE = 0xFFFF800000000000L;
+
+    /** riscv64（SV39）：内核 physmap 基址（高 256GB 区起点 0xFFFFFFC000000000）。 */
+    private static final long RISCV_KERNEL_PHYS_BASE = 0xFFFFFFC000000000L;
+
+    /** 当前架构的内核 physmap 基址（archId：0=x86_64，1=riscv64）。 */
+    static long kernelPhysBase() {
+        if (System.archId == 0) return X86_KERNEL_PHYS_BASE;
+        return RISCV_KERNEL_PHYS_BASE;
+    }
+
+    /** 物理地址 → 内核虚拟地址（physmap 覆盖全部物理内存）。 */
+    static long physToVirt(long phys) -> phys + kernelPhysBase()
+
+    /** 内核虚拟地址（physmap 内）→ 物理地址。 */
+    static long virtToPhys(long va) -> va - kernelPhysBase()
+}

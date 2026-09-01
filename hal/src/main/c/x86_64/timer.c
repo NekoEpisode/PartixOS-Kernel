@@ -19,6 +19,7 @@
 
 #include "include/stdint.h"
 #include "../runtime/timer_config.h"
+#include "../runtime/mem_layout.h"
 
 extern volatile unsigned long g_tick;
 
@@ -104,7 +105,8 @@ static int apic_probe(void) {
         wrmsr(APIC_BASE_MSR, v | APIC_BASE_EN);
     }
 
-    lapic = (volatile uint32_t *)(unsigned long)base;
+    // base 是物理地址（MSR APIC_BASE）；访问经 physmap 映射为 VA
+    lapic = (volatile uint32_t *)(uintptr_t)phys_to_virt(base);
     return 0;
 }
 

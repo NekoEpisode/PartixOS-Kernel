@@ -14,6 +14,7 @@
 #include "virtio_queue.h"
 #include "virtio_pci.h"
 #include <stdint.h>
+#include "mem_layout.h"
 
 #define VIRTIO_INPUT_EVENT_SIZE 8
 #define VIRTIO_INPUT_RING_SIZE  64
@@ -41,13 +42,12 @@ int virtio_input_dev_size(void) {
 // <= VIRTIO_INPUT_RING_SIZE (driver clamps it); after the device consumes a
 // buffer we re-offer the same slot, so slots always map 1:1 to descriptors.
 //
-// 注意：descriptor addr 用的是 dev->ring 的虚拟地址——依赖内核恒等映射
-// （VA == PA），上非恒等映射前必须先 VA→PA（与 virtio_queue.c 同假设）。
+// descriptor addr 需要物理地址：dev->ring 在堆（VA），转 physmap 物理。
 static void eventq_fill(virtio_input_dev_t *dev, virtq_t *q) {
     uint16_t n = q->queue_size;
     for (uint16_t i = 0; i < n; i++) {
         uint16_t d = virtq_alloc_desc(q);
-        uint64_t phys = (uint64_t)(uintptr_t)dev->ring[i];
+        uint64_t phys = virt_to_phys((uint64_t)(uintptr_t)dev->ring[i]);
         virtq_fill_desc(q, d, phys, VIRTIO_INPUT_EVENT_SIZE, VIRTQ_DESC_F_WRITE);
         virtq_submit(q, d);
     }
@@ -83,7 +83,7 @@ int virtio_input_poll(virtio_input_dev_t *dev, void *ev_out) {
         ((uint8_t *)ev_out)[i] = ev[i];
     }
 
-    virtq_fill_desc(q, (uint16_t)id, (uint64_t)(uintptr_t)ev,
+    virtq_fill_desc(q, (uint16_t)id, virt_to_phys((uint64_t)(uintptr_t)ev),
                     VIRTIO_INPUT_EVENT_SIZE, VIRTQ_DESC_F_WRITE);
     virtq_submit(q, (uint16_t)id);
     return 1;

@@ -1,6 +1,7 @@
 package kr.partix.kernel.io.drivers.storage.platform;
 
 import kr.partix.kernel.sys.System;
+import kr.partix.kernel.memory.MemoryLayout;
 
 /**
  * JH7110 板级平台数据（StarFive JH7110 / Milk-V Mars / VisionFive 2）。
@@ -35,9 +36,12 @@ class Jh7110Platform {
      * div 保持 U-Boot 配好的值（0x2 → 50MHz）不动。
      */
     static void enableClock() {
-        System.write32(SDIO1_CLK_AHB,
-                System.read32(SDIO1_CLK_AHB) | CLK_GATE);
-        System.write32(SDIO1_CLK_SDCARD,
-                System.read32(SDIO1_CLK_SDCARD) | CLK_GATE);
+        // 寄存器地址为物理地址，经 physmap 映射后访问
+        long ahb = MemoryLayout.physToVirt(SDIO1_CLK_AHB);
+        long sdcard = MemoryLayout.physToVirt(SDIO1_CLK_SDCARD);
+        System.write32(ahb,
+                System.read32(ahb) | CLK_GATE);
+        System.write32(sdcard,
+                System.read32(sdcard) | CLK_GATE);
     }
 }

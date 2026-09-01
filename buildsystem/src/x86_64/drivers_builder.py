@@ -13,6 +13,8 @@ DRIVERS_CFLAGS = [
     "--target=x86_64-unknown-none",
     "-ffreestanding", "-nostdlib", "-mno-red-zone",
     "-mgeneral-regs-only",
+    # 内核链接在高半区，默认 small model 的 32 位绝对重定位会溢出
+    "-mcmodel=large",
 ]
 
 
@@ -49,6 +51,7 @@ class X86_64DriversBuilder(Builder):
 
         cflags = DRIVERS_CFLAGS + (["-O0", "-g"] if self._debug else ["-O2"])
         cflags += [f"-I{HAL_ROOT}/Kernel/hal/src/main/c/x86_64/include"]
+        cflags += [f"-I{HAL_ROOT}/Kernel/hal/src/main/c/runtime"]
 
         all_objs: List[Path] = []
 

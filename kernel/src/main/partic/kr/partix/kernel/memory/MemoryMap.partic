@@ -3,6 +3,7 @@ package kr.partix.kernel.memory;
 import kr.partix.kernel.sys.System;
 import lang.partic.stdlib.additional.collection.list.ArrayList;
 import lang.partic.stdlib.additional.collection.list.List;
+import kr.partix.kernel.memory.MemoryLayout;
 
 class MemoryMapEntry {
     long start;
@@ -26,7 +27,8 @@ class MemoryMap {
     private static long totalFreePages;
 
     static void init() {
-        mmap = BootData.getMmapAddr();
+        // bootloader 传回的 mmap 是物理地址，经 physmap 映射后访问
+        mmap = MemoryLayout.physToVirt(BootData.getMmapAddr());
         mmapSize = BootData.getMmapSize();
         descSize = BootData.getDescSize();
 

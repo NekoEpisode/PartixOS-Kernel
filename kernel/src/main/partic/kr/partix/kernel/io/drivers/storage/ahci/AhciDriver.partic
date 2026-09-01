@@ -9,6 +9,7 @@ import kr.partix.kernel.io.drivers.storage.IDiskDriver;
 import kr.partix.kernel.io.pci.PCIDevice;
 import kr.partix.kernel.io.pci.IPCIIO;
 import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.memory.MemoryLayout;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.timer.Timer;
 import kr.partix.kernel.log.StartupLogger;
@@ -46,6 +47,8 @@ class AhciDriver implements IDiskDriver {
         long hi = (long) io.readConfig32(dev.bus, dev.slot, dev.func, 0x28) & 0xFFFFFFFFL;
         abar = (lo & 0xFFFFFFF0L) | (hi << 32);
         if (abar == 0) return;
+        // BAR 是物理地址：寄存器访问经 physmap 映射
+        abar = MemoryLayout.physToVirt(abar);
         initHba();
     }
 
@@ -115,10 +118,11 @@ class AhciPortDisk implements IDisk {
         StartupLogger.info(dbgMsg);
         Memory.free(dbgMsg);
         dbgSb.dispose();
-        System.write32(port + 0x00, (int) cmdList);
-        System.write32(port + 0x04, (int) (cmdList >>> 32));
-        System.write32(port + 0x08, (int) fis);
-        System.write32(port + 0x0C, (int) (fis >>> 32));
+        // DMA 结构在堆（VA）；端口寄存器存物理地址
+        System.write32(port + 0x00, (int) MemoryLayout.virtToPhys(cmdList));
+        System.write32(port + 0x04, (int) (MemoryLayout.virtToPhys(cmdList) >>> 32));
+        System.write32(port + 0x08, (int) MemoryLayout.virtToPhys(fis));
+        System.write32(port + 0x0C, (int) (MemoryLayout.virtToPhys(fis) >>> 32));
         System.write32(port + 0x18, System.read32(port + 0x18) | 0x10);   // PxCMD.FRE (bit4)
         AhciWait.set(port + 0x18, 0x10);
         System.write32(port + 0x18, System.read32(port + 0x18) | 0x01);   // PxCMD.ST (bit0)
@@ -149,8 +153,9 @@ class AhciPortDisk implements IDisk {
         // dword0: PRDTL(bit16-31) | CLR_BUSY(bit10) | CFL=5(bit0-4)
         write32(cmdList, (prdtl << 16) | (1 << 10) | 5);
         write32(cmdList + 4, 0);
-        write32(cmdList + 8, (int) cmdTable);
-        write32(cmdList + 12, (int) (cmdTable >>> 32));
+        // 命令表在堆（VA），描述符里存物理地址
+        write32(cmdList + 8, (int) MemoryLayout.virtToPhys(cmdTable));
+        write32(cmdList + 12, (int) (MemoryLayout.virtToPhys(cmdTable) >>> 32));
 
         // H2D FIS（CFIS 区，标准布局）：
         // byte0=0x27(type) byte1=0x80(C位,update cmd reg)|PMP byte2=cmd byte3=feature
@@ -170,8 +175,8 @@ class AhciPortDisk implements IDisk {
         write32(cmdTable + 12, (count & 0xFF) | (((count >> 8) & 0xFF) << 8));
 
         for (int i = 0; i < prdtl; i++) {
-            long pa = buf + (long) i * SECTOR;
-            // PRD: dword0-1=DBA, dword2=reserved, dword3=flags_size(字节数-1)
+            long pa = MemoryLayout.virtToPhys(buf + (long) i * SECTOR);
+            // PRD: dword0-1=DBA(物理), dword2=reserved, dword3=flags_size(字节数-1)
             write32(cmdTable + 0x80 + (long) i * 16, (int) pa);
             write32(cmdTable + 0x84 + (long) i * 16, (int) (pa >>> 32));
             write32(cmdTable + 0x88 + (long) i * 16, 0);

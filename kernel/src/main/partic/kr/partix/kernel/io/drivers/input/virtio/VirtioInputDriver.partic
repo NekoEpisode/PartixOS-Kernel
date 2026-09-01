@@ -11,6 +11,7 @@ import kr.partix.kernel.io.pci.CapAddrs;
 import kr.partix.kernel.io.pci.PCIDevice;
 import kr.partix.kernel.io.pci.IPCIIO;
 import kr.partix.kernel.io.pci.VirtioPCISetup;
+import kr.partix.kernel.memory.MemoryLayout;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.main.BspKrMain;
 import kr.partix.kernel.timer.Timer;
@@ -147,12 +148,13 @@ class VirtioInputDriver implements IInputDriver, IInputDevice {
         long availAligned = (availSize + 4095) & ~4095;
         long usedAligned  = (usedSize  + 4095) & ~4095;
 
-        // 注意：以下环地址是 Memory.malloc 的虚拟地址，直接当物理地址写进
-        // virtio 寄存器——依赖内核恒等映射（VA==PA）。将来上非恒等映射前
-        // 必须先做 VA→PA 转换（virtio-gpu 与 virtio_queue.c 同样假设）。
-        long descPhys  = Memory.malloc((int)descAligned);
-        long availPhys = Memory.malloc((int)availAligned);
-        long usedPhys  = Memory.malloc((int)usedAligned);
+        // 环在堆（VA）；virtio 寄存器与 descriptor 需要物理地址
+        long descVa  = Memory.malloc((int)descAligned);
+        long availVa = Memory.malloc((int)availAligned);
+        long usedVa  = Memory.malloc((int)usedAligned);
+        long descPhys  = MemoryLayout.virtToPhys(descVa);
+        long availPhys = MemoryLayout.virtToPhys(availVa);
+        long usedPhys  = MemoryLayout.virtToPhys(usedVa);
 
         int devSize = virtio_input_dev_size();
         devStruct = Memory.malloc(devSize + 15);

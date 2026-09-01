@@ -64,6 +64,8 @@ class X86_64KernelBuilder(Builder):
             cflags = [
                 "--target=x86_64-unknown-none",
                 "-ffreestanding", "-nostdlib",
+                # 内核链接在高半区，默认 small model 的 32 位绝对重定位会溢出
+                "-mcmodel=large",
                 "-O2" if not self._debug else "-O0",
             ]
             if self._debug:

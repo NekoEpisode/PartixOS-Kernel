@@ -8,6 +8,7 @@ import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.sched.Thread;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.memory.MemoryLayout;
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.core.memory.Memory;
@@ -31,7 +32,8 @@ class SysFbinfo implements ISyscallHandler {
         AddressSpace as = owner.addressSpace();
         if (as == null) return -1;
 
-        long fbPhys = (long) screen.getFramebuffer();
+        // getFramebuffer() 返回 VA（供读写）；mapScreen 的 PTE 需要物理地址
+        long fbPhys = MemoryLayout.virtToPhys((long) screen.getFramebuffer());
         long fbSize = screen.getFramebufferSize();
         long fbAddr = as.mapScreen(id, fbPhys, fbSize);
         if (fbAddr < 0) return -1;
@@ -43,7 +45,7 @@ class SysFbinfo implements ISyscallHandler {
         str ids = StrUtils.longToStr(id);
         sb.append(ids);
         Memory.free(ids);
-        sb.append(" phys=0x");
+        sb.append(" phys=");
         sb.append(StrUtils.toHex(fbPhys));
         sb.append(" size=");
         str sz = StrUtils.longToStr(fbSize);

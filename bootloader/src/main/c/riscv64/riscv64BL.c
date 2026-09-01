@@ -106,13 +106,22 @@ static EFI_STATUS open_elf(EFI_BOOT_SERVICES* bs, EFI_HANDLE img, VOID** out, UI
     return s;
 }
 
+// 内核高半区 VMA 基址：主映像物理地址 = vaddr - KERNEL_VMA_BASE
+// （与内核 physmap 映射 VA = BASE + phys 一致；不依赖 ELF 的 p_paddr）。
+// 引导区 vaddr 在低地址，物理地址即 vaddr 本身。
+#define KERNEL_VMA_BASE 0xFFFFFFC000000000ULL
+
+static UINT64 load_addr(UINT64 vaddr) {
+    return vaddr >= KERNEL_VMA_BASE ? vaddr - KERNEL_VMA_BASE : vaddr;
+}
+
 static UINT64 load_elf(EFI_BOOT_SERVICES* bs, EFI_HANDLE img, VOID* elf, BootInfo* info) {
     Elf64_Ehdr* eh = elf;
     Elf64_Phdr* ph = (Elf64_Phdr*)((UINT8*)elf + eh->e_phoff);
     UINT64 lo = ~0ULL, hi = 0;
     for (UINTN i = 0; i < eh->e_phnum; i++) {
         if (ph[i].p_type != PT_LOAD || ph[i].p_memsz == 0) continue;
-        UINT64 s = ph[i].p_vaddr, e = s + ph[i].p_memsz;
+        UINT64 s = load_addr(ph[i].p_vaddr), e = s + ph[i].p_memsz;
         if (s < lo) lo = s; if (e > hi) hi = e;
     }
     if (hi <= lo) return eh->e_entry;
@@ -126,7 +135,7 @@ static UINT64 load_elf(EFI_BOOT_SERVICES* bs, EFI_HANDLE img, VOID* elf, BootInf
     // 不在这里 memset，避免把仍在提供 EFI 服务的 u-boot 后部代码清掉。
     for (UINTN i = 0; i < eh->e_phnum; i++) {
         if (ph[i].p_type != PT_LOAD || ph[i].p_memsz == 0) continue;
-        UINT64 d = ph[i].p_vaddr;
+        UINT64 d = load_addr(ph[i].p_vaddr);
         if (ph[i].p_filesz > 0)
             memcpy((VOID*)d, (UINT8*)elf + ph[i].p_offset, ph[i].p_filesz);
     }

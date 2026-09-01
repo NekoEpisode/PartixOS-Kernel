@@ -2,6 +2,7 @@ package kr.partix.kernel.arch.riscv;
 
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.io.uart.IUART;
+import kr.partix.kernel.memory.MemoryLayout;
 import kr.partix.kernel.timer.Timer;
 
 class RISCVUART implements IUART {
@@ -9,7 +10,8 @@ class RISCVUART implements IUART {
     private final long shift;   // FDT reg-shift：寄存器偏移 = 标准偏移 << shift（DW-APB 为 2）
 
     RISCVUART(long addr, long shift) {
-        this.addr = addr;
+        // FDT 给的是物理地址，经 physmap 映射后访问
+        this.addr = MemoryLayout.physToVirt(addr);
         this.shift = shift;
     }
 
