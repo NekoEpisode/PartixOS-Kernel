@@ -1,0 +1,294 @@
+package kr.partix.kernel.io.usb;
+
+import kr.partix.kernel.device.DeviceRegistry;
+import kr.partix.kernel.event.EventBus;
+import kr.partix.kernel.event.EventId;
+import kr.partix.kernel.event.events.DeviceEvent;
+import kr.partix.kernel.io.drivers.DriverRegistry;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.log.StartupLogger;
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * USB 核心：树形模型（UsbRoot → UsbPort → USBDevice → hub 下行端口…）。
+ * 递归轮询插拔、枚举、注册进 DeviceRegistry 并发布 DeviceAttach/DetachEvent；
+ * 类驱动绑定/解绑由 UsbClassRouter 响应事件完成。
+ * 注意：本类在启动完成后由轮询线程使用，日志走 UART 直连（StartupLogger
+ * 在 completed() 之后会抛异常）。
+ */
+class UsbCore {
+    private static UsbRoot[] roots;
+
+    static void init() {
+        IDriver[] drivers = DriverRegistry.findAll(DriverType.USB);
+        int n = 0;
+        for (int i = 0; i < drivers.length; i++) {
+            if (drivers[i] == null) continue;
+            if (((IHc) drivers[i]).getPortCount() > 0) n += 1;
+        }
+        roots = new UsbRoot[n];
+        int idx = 0;
+        for (int i = 0; i < drivers.length; i++) {
+            if (drivers[i] == null) continue;
+            IHc hc = (IHc) drivers[i];
+            if (hc.getPortCount() <= 0) continue;
+            roots[idx] = new UsbRoot(hc);
+            idx += 1;
+            StrBuilder sb = new StrBuilder();
+            sb.append("usb: ");
+            sb.append(hcTypeName(hc.getHcType()));
+            sb.append(" controller, ports=");
+            str ps = StrUtils.toDec(hc.getPortCount());
+            sb.append(ps);
+            Memory.free(ps);
+            str msg = sb.build();
+            StartupLogger.info(msg);
+            Memory.free(msg);
+            sb.dispose();
+        }
+        EventBus.registerEventListener(EventId.DEVICE_ATTACHED, new UsbClassRouter());
+        EventBus.registerEventListener(EventId.DEVICE_DETACHED, new UsbClassRouter());
+        if (n == 0) StartupLogger.warn("no USB host controllers found");
+    }
+
+    /** 一次插拔扫描（由轮询线程周期调用）。 */
+    static void pollOnce() {
+        for (int i = 0; i < roots.length; i++) {
+            pollRoot(roots[i]);
+        }
+    }
+
+    private static void pollRoot(UsbRoot root) {
+        IHc hc = root.getHc();
+        for (int p = 0; p < root.getPortCount(); p++) {
+            pollPort(hc, root.getPort(p));
+        }
+    }
+
+    private static void pollPort(IHc hc, UsbPort port) {
+        USBDevice hub = port.getHub();
+        boolean changed;
+        if (hub == null) {
+            changed = hc.isPortChanged(port.getPort());
+        } else {
+            int[] pst = new int[2];
+            if (!UsbHub.getPortStatus(hc, hub.getAddress(), port.getPort(), pst)) return;
+            changed = UsbHub.isChanged(pst);
+        }
+        if (!changed) {
+            recurseHub(hc, port);
+            return;
+        }
+        // 诊断：端口变化
+        StrBuilder dbg = new StrBuilder();
+        dbg.append("usb: port change port=");
+        str ps2 = StrUtils.toDec(port.getPort());
+        dbg.append(ps2);
+        Memory.free(ps2);
+        str dm = dbg.build();
+        uart(dm);
+        Memory.free(dm);
+        dbg.dispose();
+        // 清变化位
+        if (hub == null) {
+            hc.clearPortChanged(port.getPort());
+        } else {
+            UsbHub.clearChanged(hc, hub.getAddress(), port.getPort());
+        }
+        // 连接判定
+        boolean connected;
+        if (hub == null) {
+            connected = hc.isPortConnected(port.getPort());
+        } else {
+            int[] pst = new int[2];
+            if (!UsbHub.getPortStatus(hc, hub.getAddress(), port.getPort(), pst)) return;
+            connected = UsbHub.isConnected(pst);
+        }
+        if (connected) {
+            if (port.getDev() == null) attach(hc, port);
+        } else {
+            if (port.getDev() != null) detach(port);
+        }
+        recurseHub(hc, port);
+    }
+
+    /** 端口上挂着 hub 时，递归轮询它的下行端口。 */
+    private static void recurseHub(IHc hc, UsbPort port) {
+        USBDevice dev = port.getDev();
+        if (dev == null || !UsbHub.isHub(dev)) return;
+        UsbPort[] childPorts = dev.getPorts();
+        if (childPorts == null) return;
+        for (int i = 0; i < childPorts.length; i++) {
+            pollPort(hc, childPorts[i]);
+        }
+    }
+
+    private static void attach(IHc hc, UsbPort port) {
+        USBDevice hub = port.getHub();
+        int speed;
+        if (hub == null) {
+            if (!hc.resetPort(port.getPort())) {
+                uart("usb: port reset failed");
+                return;
+            }
+            speed = hc.getPortSpeed(port.getPort());
+        } else {
+            int hubAddr = hub.getAddress();
+            if (!UsbHub.resetPort(hc, hubAddr, port.getPort())) {
+                uart("usb: hub port reset failed");
+                return;
+            }
+            int[] pst = new int[2];
+            if (!UsbHub.getPortStatus(hc, hubAddr, port.getPort(), pst)) {
+                uart("usb: hub port status failed");
+                return;
+            }
+            speed = UsbHub.speedOf(pst);
+        }
+
+        long route = routeOf(port);
+        int rootPort = rootPortOf(port);
+        int[] tt = ttOf(port, speed);
+        int addr = hc.addressDevice(rootPort, route, speed, tt[0], tt[1]);
+        if (addr == 0) {
+            uart("usb: address device failed");
+            return;
+        }
+
+        long buf = Memory.malloc(64);
+        boolean ok = hc.controlTransfer(addr, 0x80, 6, 0x0100, 0, 18, buf);
+        if (!ok) {
+            uart("usb: device descriptor read failed");
+            Memory.free(buf);
+            return;
+        }
+        int vid = ((int) System.read8(buf + 8) & 0xFF)
+                | (((int) System.read8(buf + 9) & 0xFF) << 8);
+        int pid = ((int) System.read8(buf + 10) & 0xFF)
+                | (((int) System.read8(buf + 11) & 0xFF) << 8);
+        int cls = (int) System.read8(buf + 4) & 0xFF;
+        int sub = (int) System.read8(buf + 5) & 0xFF;
+        int proto = (int) System.read8(buf + 6) & 0xFF;
+        Memory.free(buf);
+
+        USBDevice dev = new USBDevice(hc, hub, port.getPort(), addr, vid, pid, cls, sub, proto, speed);
+        dev.setInterfaces(UsbConfigParser.parse(hc, addr));
+        port.setDev(dev);
+        DeviceRegistry.register(dev);
+
+        StrBuilder sb = new StrBuilder();
+        sb.append("usb: device vid=");
+        sb.append(StrUtils.toHex((long) vid));
+        sb.append(" pid=");
+        sb.append(StrUtils.toHex((long) pid));
+        sb.append(" class=");
+        str cs = StrUtils.toDec(cls);
+        sb.append(cs);
+        Memory.free(cs);
+        str msg = sb.build();
+        uart(msg);
+        Memory.free(msg);
+        sb.dispose();
+
+        DeviceEvent ev = DeviceEvent.attached(dev);
+        EventBus.call(ev);
+        Memory.free((long) ev);
+
+        // hub → 建下行端口
+        if (UsbHub.isHub(dev)) {
+            setupHubPorts(hc, dev);
+        }
+    }
+
+    private static void setupHubPorts(IHc hc, USBDevice hub) {
+        int n = UsbHub.getPortCount(hc, hub.getAddress());
+        if (n <= 0) return;
+        UsbPort[] childPorts = new UsbPort[n];
+        for (int i = 0; i < n; i++) {
+            UsbHub.setFeature(hc, hub.getAddress(), i + 1, 8);   // PORT_POWER
+            childPorts[i] = new UsbPort(hub, i + 1, null);
+        }
+        hub.setPorts(childPorts);
+        StrBuilder sb = new StrBuilder();
+        sb.append("usb: hub ports=");
+        str ps = StrUtils.toDec(n);
+        sb.append(ps);
+        Memory.free(ps);
+        str msg = sb.build();
+        uart(msg);
+        Memory.free(msg);
+        sb.dispose();
+    }
+
+    private static void detach(UsbPort port) {
+        USBDevice dev = port.getDev();
+        port.setDev(null);
+        if (dev != null) destroy(dev);
+    }
+
+    /** 递归拆除：先子后父；驱动卸载由 DeviceDetachEvent 交给 UsbClassRouter。 */
+    private static void destroy(USBDevice dev) {
+        UsbPort[] childPorts = dev.getPorts();
+        if (childPorts != null) {
+            for (int i = 0; i < childPorts.length; i++) {
+                USBDevice child = childPorts[i].getDev();
+                if (child != null) destroy(child);
+                Memory.free((long) childPorts[i]);
+            }
+            Memory.free((long) childPorts);
+        }
+        DeviceRegistry.unregister(dev);
+        DeviceEvent ev = DeviceEvent.detached(dev);
+        EventBus.call(ev);
+        Memory.free((long) ev);
+        Memory.free((long) dev);
+        uart("usb: device removed");
+    }
+
+    private static long routeOf(UsbPort port) {
+        USBDevice hub = port.getHub();
+        if (hub == null) return 0;
+        return hub.getRouteString() | (((long) port.getPort() & 0xF) << (4 * hub.getDepth()));
+    }
+
+    private static int rootPortOf(UsbPort port) {
+        USBDevice hub = port.getHub();
+        if (hub == null) return port.getPort();
+        return hub.getRootPort();
+    }
+
+    /** TT：LS/FS 设备向上找最近的 HS hub（TT Hub Slot + 出口端口）。 */
+    private static int[] ttOf(UsbPort port, int speed) {
+        int[] out = new int[2];
+        USBDevice hub = port.getHub();
+        if (hub == null) return out;
+        if (speed != 1 && speed != 2) return out;   // 仅 LS/FS 需要 TT
+        USBDevice h = hub;
+        int portOnTt = port.getPort();
+        while (h != null && h.getSpeed() != 3) {
+            portOnTt = h.getPort();
+            h = h.getParent();
+        }
+        if (h == null) return out;
+        out[0] = h.getAddress();
+        out[1] = portOnTt;
+        return out;
+    }
+
+    private static void uart(str msg) {
+        BspKrMain.arch.getUart().println(msg);
+    }
+
+    private static str hcTypeName(int progIF) {
+        if (progIF == 0x30) return "xHCI";
+        if (progIF == 0x20) return "EHCI";
+        if (progIF == 0x10) return "OHCI";
+        if (progIF == 0x00) return "UHCI";
+        return "unknown";
+    }
+}

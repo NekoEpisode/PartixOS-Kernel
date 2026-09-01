@@ -34,6 +34,29 @@ class EventBus {
         }
     }
 
+    /**
+     * 反注册监听器（如设备拆除时摘掉对应监听器）；返回是否移除成功。
+     * 列表空后把整个事件 ID 的条目从表中移除。
+     */
+    static boolean unregisterEventListener(int eventId, IEventListener listener) {
+        if (!inited) throw new NotInitializedException("EventBus not initialized!", null);
+        if (listener == null) return false;
+        IntegerBox key = new IntegerBox(eventId);
+        List<IEventListener> eventListenerList = eventListeners.get(key);
+        boolean removed = false;
+        if (eventListenerList != null) {
+            IEventListener old = eventListenerList.remove(listener);
+            removed = old != null;
+            if (removed && eventListenerList.isEmpty()) {
+                // 列表空了：整条移除并回收空列表对象
+                List<IEventListener> evicted = eventListeners.remove(key);
+                if (evicted != null) Memory.free((long) evicted);
+            }
+        }
+        Memory.free((long) key);
+        return removed;
+    }
+
     static void call(AEvent event) {
         if (!inited) throw new NotInitializedException("EventBus not initialized!", null);
         if (event != null) {

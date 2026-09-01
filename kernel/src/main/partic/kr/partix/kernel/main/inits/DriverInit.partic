@@ -9,6 +9,8 @@ import kr.partix.kernel.io.drivers.input.virtio.VirtioInputDriverTemplate;
 import kr.partix.kernel.io.drivers.storage.ahci.AhciDriverTemplate;
 import kr.partix.kernel.io.drivers.storage.dwmmc.DwMmcDriverTemplate;
 import kr.partix.kernel.io.screen.UefiFramebufferScreen;
+import kr.partix.kernel.io.usb.Cdns3HcTemplate;
+import kr.partix.kernel.io.usb.UsbHcTemplate;
 
 class DriverInit {
     static void init() {
@@ -17,6 +19,8 @@ class DriverInit {
         DriverRegistry.register(new AhciDriverTemplate());
         DriverRegistry.register(new DwMmcDriverTemplate());
         DriverRegistry.register(new VirtioInputDriverTemplate());
+        DriverRegistry.register(new UsbHcTemplate());
+        DriverRegistry.register(new Cdns3HcTemplate());
         if (UefiFramebufferScreen.hasFramebuffer()) {
             DeviceRegistry.register(new GopDevice());
             DriverRegistry.register(new UefiGopDriver());

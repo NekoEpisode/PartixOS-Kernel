@@ -101,6 +101,49 @@ class X86PageTableManager implements IPageTableManager {
         paging_flush_tlb();
     }
 
+    /** 把 [phys, phys+size) 映射进 physmap（2MB 对齐，向上取整）。 */
+    void mapPhys(long phys, long size, int flags) {
+        long start = phys & ~0x1FFFFFL;
+        long end = (phys + size + 0x1FFFFFL) & ~0x1FFFFFL;
+        for (long p = start; p < end; p += 0x200000L) {
+            mapPhys2m(p, flags);
+        }
+        paging_flush_tlb();
+    }
+
+    /** 映射 physmap 内一个 2MB 页；中间表按需分配。 */
+    private void mapPhys2m(long phys, int flags) {
+        long va = MemoryLayout.kernelPhysBase() + phys;
+        int pml4Index = (int) ((va >>> 39) & 0x1FF);
+        int pdptIndex = (int) ((va >>> 30) & 0x1FF);
+        int pdIndex   = (int) ((va >>> 21) & 0x1FF);
+
+        long entry = phys | PML4E_PRESENT | PML4E_RW | PDE_PS_2MB;
+        if ((flags & PageFlags.NO_EXEC) != 0) entry |= PDE_NX;
+
+        long pml4e = System.read64(pml4 + (long) pml4Index * 8);
+        long pdpt;
+        if ((pml4e & PML4E_PRESENT) == 0) {
+            pdpt = allocZeroPage();
+            System.write64(pml4 + (long) pml4Index * 8,
+                    MemoryLayout.virtToPhys(pdpt) | PML4E_PRESENT | PML4E_RW);
+        } else {
+            pdpt = MemoryLayout.physToVirt(pml4e & ADDR_MASK);
+        }
+
+        long pdpte = System.read64(pdpt + (long) pdptIndex * 8);
+        long pd;
+        if ((pdpte & PML4E_PRESENT) == 0) {
+            pd = allocZeroPage();
+            System.write64(pdpt + (long) pdptIndex * 8,
+                    MemoryLayout.virtToPhys(pd) | PML4E_PRESENT | PML4E_RW);
+        } else {
+            pd = MemoryLayout.physToVirt(pdpte & ADDR_MASK);
+        }
+
+        System.write64(pd + (long) pdIndex * 8, entry);
+    }
+
     void load() {
         paging_load_cr3(MemoryLayout.virtToPhys(pml4));
         activeRoot = pml4;

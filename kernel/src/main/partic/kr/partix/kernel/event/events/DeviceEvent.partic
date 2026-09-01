@@ -1,0 +1,22 @@
+package kr.partix.kernel.event.events;
+
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.event.AEvent;
+import kr.partix.kernel.event.EventId;
+
+/** 设备热插拔事件：设备枚举完成 / 拔出时由发现方发布。 */
+class DeviceEvent extends AEvent {
+    private final int eventId;
+    private final IDevice device;
+
+    private DeviceEvent(int eventId, IDevice device) {
+        this.eventId = eventId;
+        this.device = device;
+    }
+
+    static DeviceEvent attached(IDevice device) -> new DeviceEvent(EventId.DEVICE_ATTACHED, device)
+    static DeviceEvent detached(IDevice device) -> new DeviceEvent(EventId.DEVICE_DETACHED, device)
+
+    int getEventId() -> eventId
+    IDevice getDevice() -> device
+}

@@ -1,0 +1,110 @@
+package kr.partix.kernel.io.usb;
+
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.DeviceResource;
+import kr.partix.kernel.device.IDevice;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * USB 设备（树节点）。parent 链表达拓扑，route/根端口/深度沿链派生；
+ * hub 设备持有下行端口数组（ports）。
+ */
+class USBDevice implements IDevice {
+    private final IHc hc;
+    private final USBDevice parent;
+    private final int portOnParent;   // 父端口（根设备=根端口 0-based；hub 子设备=hub 下行端口 1-based）
+    private final int address;
+    private final int vid;
+    private final int pid;
+    private final int devClass;
+    private final int devSubclass;
+    private final int devProtocol;
+    private final int speed;          // XHCI 速度码 1=FS 2=LS 3=HS 4=SS
+
+    private USBInterface[] interfaces;   // 配置 0 解析结果
+    private UsbPort[] ports;             // 仅 hub 设备
+
+    USBDevice(IHc hc, USBDevice parent, int portOnParent, int address,
+              int vid, int pid, int devClass, int devSubclass, int devProtocol, int speed) {
+        this.hc = hc;
+        this.parent = parent;
+        this.portOnParent = portOnParent;
+        this.address = address;
+        this.vid = vid;
+        this.pid = pid;
+        this.devClass = devClass;
+        this.devSubclass = devSubclass;
+        this.devProtocol = devProtocol;
+        this.speed = speed;
+    }
+
+    // ── IDevice ──
+
+    int getBusType() -> BusType.USB
+
+    long getVendorId() -> vid
+
+    long getDeviceId() -> pid
+
+    str getCompatible() -> null
+
+    int getResourceCount() -> 0
+
+    DeviceResource getResource(int index) -> null
+
+    str getName() {
+        StrBuilder sb = new StrBuilder();
+        sb.append("usb-");
+        sb.append(StrUtils.toHex((long) vid));
+        sb.append("-");
+        sb.append(StrUtils.toHex((long) pid));
+        str out = sb.build();
+        sb.dispose();
+        return out;
+    }
+
+    // ── 拓扑 ──
+
+    IHc getHc() -> hc
+    USBDevice getParent() -> parent
+    int getPort() -> portOnParent
+    int getAddress() -> address
+    int getSpeed() -> speed
+
+    int getDepth() {
+        if (parent == null) return 0;
+        return parent.getDepth() + 1;
+    }
+
+    /** 路由链挂载的根端口索引（0-based）。 */
+    int getRootPort() {
+        if (parent == null) return portOnParent;
+        return parent.getRootPort();
+    }
+
+    /** 路由字符串：每 4 位一个 hub 端口号（从最靠近根的 hub 起）。 */
+    long getRouteString() {
+        if (parent == null) return 0;
+        return parent.getRouteString() | (((long) portOnParent & 0xF) << (4 * parent.getDepth()));
+    }
+
+    // ── 接口 / 下行端口 ──
+
+    USBInterface[] getInterfaces() -> interfaces
+    void setInterfaces(USBInterface[] ifs) {
+        this.interfaces = ifs;
+    }
+
+    UsbPort[] getPorts() -> ports
+    void setPorts(UsbPort[] p) {
+        this.ports = p;
+    }
+
+    // ── 设备描述符 ──
+
+    int getDevClass() -> devClass
+    int getDevSubclass() -> devSubclass
+    int getDevProtocol() -> devProtocol
+}

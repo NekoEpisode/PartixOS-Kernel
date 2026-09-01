@@ -12,4 +12,7 @@ interface IDriver {
     IDriver create(IDevice device);
 
     str description();
+
+    /** 实例卸载钩子（设备拔出时由 DriverRegistry.unbindDevice 调用）；模板通常为空实现。 */
+    void detach();
 }

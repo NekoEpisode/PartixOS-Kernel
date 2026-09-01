@@ -5,4 +5,5 @@ class BusType {
     static final int PCI      = 1;
     static final int PLATFORM = 2;   // 平台直连设备（UEFI GOP、固定 MMIO 等）
     static final int DT       = 3;   // 设备树节点
+    static final int USB      = 4;   // USB 总线（主机控制器之下的功能设备）
 }

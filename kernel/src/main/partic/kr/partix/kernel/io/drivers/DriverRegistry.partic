@@ -12,6 +12,12 @@ class DriverRegistry {
     private static IDriver[] templates = new IDriver[SLOTS];
     private static int registered;
 
+    // 绑定表（热插拔驱动实例）：设备 → 实例，并行定长数组
+    private static final int BIND_SLOTS = 64;
+    private static IDevice[] boundDevices = new IDevice[BIND_SLOTS];
+    private static IDriver[] boundInstances = new IDriver[BIND_SLOTS];
+    private static int boundCount;
+
     static void register(IDriver d) {
         templates[registered] = d;
         registered++;
@@ -28,7 +34,7 @@ class DriverRegistry {
 
     /**
      * 遍历设备注册中心，驱动自匹配；每个 (驱动, 设备) 对 create 一次。
-     * 设备来源（PCI / 平台 / 未来 DT）对驱动完全透明。
+     * 设备来源（PCI / 平台 / USB / DT）对驱动完全透明。
      */
     static IDriver[] findAll(int type) {
         IDriver[] result = new IDriver[DeviceRegistry.getCount()];
@@ -45,4 +51,48 @@ class DriverRegistry {
         }
         return result;
     }
+
+    /**
+     * 事件驱动绑定：设备热插拔（attach）时对单个设备按类型匹配模板并创建
+     * 驱动实例（与 findAll 的"遍历设备"方向相反：单设备 → 遍历模板）。
+     * 实例记入绑定表（设备 → 实例），拔出时经 unbindDevice 摘除。
+     * 返回创建的第一个实例；无匹配返回 null。
+     */
+    static IDriver bindDevice(int type, IDevice dev) {
+        if (dev == null) return null;
+        for (int j = 0; j < registered; j++) {
+            if (templates[j].getType() == type && templates[j].match(dev)) {
+                IDriver inst = templates[j].create(dev);
+                if (inst != null && boundCount < BIND_SLOTS) {
+                    boundDevices[boundCount] = dev;
+                    boundInstances[boundCount] = inst;
+                    boundCount += 1;
+                }
+                return inst;
+            }
+        }
+        return null;
+    }
+
+    /** 设备拔出：找到绑定实例并调用其 detach()，随后摘除绑定。 */
+    static void unbindDevice(IDevice dev) {
+        if (dev == null) return;
+        for (int i = 0; i < boundCount; i++) {
+            if (boundDevices[i] == dev) {
+                boundInstances[i].detach();
+                int j = i;
+                while (j < boundCount - 1) {
+                    boundDevices[j] = boundDevices[j + 1];
+                    boundInstances[j] = boundInstances[j + 1];
+                    j += 1;
+                }
+                boundCount -= 1;
+                return;
+            }
+        }
+    }
+
+    static int getBoundCount() -> boundCount
+    static IDevice getBoundDevice(int i) -> boundDevices[i]
+    static IDriver getBoundDriver(int i) -> boundInstances[i]
 }

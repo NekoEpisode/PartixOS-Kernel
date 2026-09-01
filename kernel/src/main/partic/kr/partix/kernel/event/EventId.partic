@@ -1,8 +1,10 @@
 package kr.partix.kernel.event;
 
 class EventId {
-    static final int TEST_EVENT                = 0;
-    static final int INTERRUPT_EVENT           = 1;
-    static final int TIMER_EVENT               = 2;
+    static final int TEST_EVENT                 = 0;
+    static final int INTERRUPT_EVENT            = 1;
+    static final int TIMER_EVENT                = 2;
     static final int TRIGGER_NULL_POINTER_EVENT = 3;
+    static final int DEVICE_ATTACHED            = 4;   // 设备插上（USB 枚举完成等）
+    static final int DEVICE_DETACHED            = 5;   // 设备拔下
 }

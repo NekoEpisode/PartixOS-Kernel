@@ -1,0 +1,21 @@
+package kr.partix.kernel.io.usb;
+
+/** USB 插槽（一条物理端口）：根端口（hub=null）或 hub 下行端口。 */
+class UsbPort {
+    private USBDevice hub;    // null = 控制器根端口
+    private int port;         // 根端口 0-based；hub 下行端口 1-based
+    private USBDevice dev;    // 挂载的设备
+
+    UsbPort(USBDevice hub, int port, USBDevice dev) {
+        this.hub = hub;
+        this.port = port;
+        this.dev = dev;
+    }
+
+    USBDevice getHub() -> hub
+    int getPort() -> port
+    USBDevice getDev() -> dev
+    void setDev(USBDevice d) {
+        this.dev = d;
+    }
+}

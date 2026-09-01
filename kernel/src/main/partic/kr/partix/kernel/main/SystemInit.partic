@@ -6,6 +6,7 @@ import kr.partix.kernel.main.inits.DeviceInit;
 import kr.partix.kernel.main.inits.DiskInit;
 import kr.partix.kernel.main.inits.FSInit;
 import kr.partix.kernel.main.inits.DevFSInit;
+import kr.partix.kernel.io.usb.USBInit;
 import kr.partix.kernel.program.ProgramLoaderRegistry;
 import kr.partix.kernel.syscall.Syscall;
 
@@ -19,6 +20,7 @@ class SystemInit {
 
         DriverInit.init();
         DeviceInit.init();
+        USBInit.init();
         DevFSInit.init();
         DiskInit.init();
         FSInit.init();

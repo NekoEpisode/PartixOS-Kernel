@@ -13,6 +13,7 @@ import kr.partix.kernel.memory.MemoryMap;
 import kr.partix.kernel.memory.PageAllocator;
 import kr.partix.kernel.io.screen.IScreen;
 import kr.partix.kernel.io.screen.ScreenRegistry;
+import kr.partix.kernel.io.usb.UsbPollRunnable;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.io.screen.utils.ScreenUtils;
 import kr.partix.kernel.io.screen.utils.RGB;
@@ -122,6 +123,8 @@ class BspKrMain {
         Scheduler.add(kt1);
         Thread kt2 = Scheduler.createKernelThread(new CountRunnable("B"));
         Scheduler.add(kt2);
+        Thread kt3 = Scheduler.createKernelThread(new UsbPollRunnable());
+        Scheduler.add(kt3);
         arch.getUart().println("[sched] kthreads ready");
 
         bootUserProgram();

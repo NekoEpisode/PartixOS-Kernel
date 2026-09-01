@@ -1,0 +1,14 @@
+package kr.partix.kernel.io.usb;
+
+import kr.partix.kernel.sched.KernelRunnable;
+import kr.partix.kernel.sched.Scheduler;
+
+/** USB 插拔轮询线程。 */
+class UsbPollRunnable extends KernelRunnable {
+    void run() {
+        while (true) {
+            UsbCore.pollOnce();
+            Scheduler.sleep(150);
+        }
+    }
+}

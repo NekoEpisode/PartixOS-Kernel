@@ -1,0 +1,95 @@
+package kr.partix.kernel.io.usb;
+
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.timer.Timer;
+import lang.partic.stdlib.core.memory.Memory;
+
+/** USB Hub（设备类 0x09）：hub 描述符读取 + 下行端口类请求。 */
+class UsbHub {
+    static final int CLASS_HUB = 9;
+
+    private static final int REQ_GET_STATUS     = 0;
+    private static final int REQ_CLEAR_FEATURE  = 1;
+    private static final int REQ_SET_FEATURE    = 3;
+    private static final int REQ_GET_DESCRIPTOR = 6;
+
+    private static final int FEAT_PORT_RESET          = 4;
+    private static final int FEAT_PORT_POWER          = 8;
+    private static final int FEAT_C_PORT_CONNECTION   = 16;
+    private static final int FEAT_C_PORT_ENABLE       = 17;
+    private static final int FEAT_C_PORT_SUSPEND      = 18;
+    private static final int FEAT_C_PORT_OVERCURRENT  = 19;
+    private static final int FEAT_C_PORT_RESET        = 20;
+
+    private static final int CHANGE_MASK = 0x1F;   // wPortChange bits 0-4：C_CONNECTION/C_ENABLE/C_SUSPEND/C_OVERCURRENT/C_RESET
+
+    static boolean isHub(USBDevice dev) -> dev.getDevClass() == CLASS_HUB
+
+    /** 读 hub 描述符取端口数；失败返回 0。 */
+    static int getPortCount(IHc hc, int addr) {
+        long buf = Memory.malloc(8);
+        boolean ok = hc.controlTransfer(addr, 0xA0, REQ_GET_DESCRIPTOR, 0x2900, 0, 8, buf);
+        int n = 0;
+        if (ok) n = (int) System.read8(buf + 2) & 0xFF;
+        Memory.free(buf);
+        return n;
+    }
+
+    /** 端口状态：out[0]=wPortStatus out[1]=wPortChange。 */
+    static boolean getPortStatus(IHc hc, int addr, int port, int[] out) {
+        long buf = Memory.malloc(4);
+        boolean ok = hc.controlTransfer(addr, 0xA3, REQ_GET_STATUS, 0, port, 4, buf);
+        if (ok) {
+            out[0] = read16(buf);
+            out[1] = read16(buf + 2);
+        }
+        Memory.free(buf);
+        return ok;
+    }
+
+    static boolean setFeature(IHc hc, int addr, int port, int feature) {
+        return hc.controlTransfer(addr, 0x23, REQ_SET_FEATURE, feature, port, 0, 0);
+    }
+
+    static boolean clearFeature(IHc hc, int addr, int port, int feature) {
+        return hc.controlTransfer(addr, 0x23, REQ_CLEAR_FEATURE, feature, port, 0, 0);
+    }
+
+    static boolean isChanged(int[] pst) -> (pst[1] & CHANGE_MASK) != 0
+
+    static boolean isConnected(int[] pst) -> (pst[0] & 1) != 0
+
+    static void clearChanged(IHc hc, int addr, int port) {
+        clearFeature(hc, addr, port, FEAT_C_PORT_CONNECTION);
+        clearFeature(hc, addr, port, FEAT_C_PORT_ENABLE);
+        clearFeature(hc, addr, port, FEAT_C_PORT_SUSPEND);
+        clearFeature(hc, addr, port, FEAT_C_PORT_OVERCURRENT);
+        clearFeature(hc, addr, port, FEAT_C_PORT_RESET);
+    }
+
+    /** 复位下行端口：SET PORT_RESET，等 RESET 位自清。 */
+    static boolean resetPort(IHc hc, int addr, int port) {
+        if (!setFeature(hc, addr, port, FEAT_PORT_RESET)) return false;
+        int[] pst = new int[2];
+        long deadline = Timer.getTicks() + Timer.TICK_HZ / 2;
+        while (Timer.getTicks() < deadline) {
+            if (!getPortStatus(hc, addr, port, pst)) return false;
+            if ((pst[0] & 0x10) == 0) {   // RESET 位自清
+                clearFeature(hc, addr, port, FEAT_C_PORT_RESET);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 端口速度 → XHCI 速度码（1=FS 2=LS 3=HS 4=SS）；USB2 wPortStatus bit9=LS bit10=HS。 */
+    static int speedOf(int[] pst) {
+        if ((pst[0] & 0x200) != 0) return 2;   // LOW_SPEED
+        if ((pst[0] & 0x400) != 0) return 3;   // HIGH_SPEED
+        return 1;                              // FULL_SPEED
+    }
+
+    private static int read16(long va) {
+        return ((int) System.read8(va) & 0xFF) | (((int) System.read8(va + 1) & 0xFF) << 8);
+    }
+}

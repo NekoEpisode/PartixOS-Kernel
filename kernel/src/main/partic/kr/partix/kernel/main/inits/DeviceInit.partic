@@ -48,6 +48,7 @@ class DeviceInit {
     private static str busName(int busType) {
         if (busType == BusType.PCI) return "pci";
         if (busType == BusType.PLATFORM) return "platform";
+        if (busType == BusType.USB) return "usb";
         return "dt";
     }
 }

@@ -6,4 +6,5 @@ class DriverType {
     static final int STORAGE  = 3;
     static final int INPUT    = 4;
     static final int AUDIO    = 5;
+    static final int USB      = 6;   // USB 主机控制器驱动（总线驱动）
 }

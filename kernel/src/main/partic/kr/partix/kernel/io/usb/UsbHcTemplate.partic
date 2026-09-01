@@ -1,0 +1,50 @@
+package kr.partix.kernel.io.usb;
+
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.pci.IPCIIO;
+import kr.partix.kernel.io.pci.PCIDevice;
+import kr.partix.kernel.io.usb.xhci.XhciDriver;
+import kr.partix.kernel.log.StartupLogger;
+import kr.partix.kernel.main.BspKrMain;
+
+/**
+ * USB 主机控制器发现模板（PCI 路径）：按 PCI 标准 class 匹配（0x0C03 =
+ * 串行总线/USB），progIF 区分类型（0x30=xHCI 0x20=EHCI 0x10=OHCI 0x00=UHCI）。
+ * 不匹配 VID/PID；MMIO 基址从 BAR 读。
+ */
+class UsbHcTemplate implements IDriver {
+    private static final int CLASS_USB = 0x0C03;
+    private static final int PROGIF_DEVICE = 0xFE;   // USB Device（非主机）排除
+
+    int getType() -> DriverType.USB
+
+    str description() -> "USB host controller (PCI class 0x0C03)"
+
+    void detach() {
+    }
+
+    boolean match(IDevice device) {
+        if (device.getBusType() != BusType.PCI) return false;
+        if (!(device instanceof PCIDevice)) return false;
+        PCIDevice p = (PCIDevice) device;
+        if (p.classCode != CLASS_USB) return false;
+        return p.progIF != PROGIF_DEVICE;
+    }
+
+    IDriver create(IDevice d) {
+        PCIDevice p = (PCIDevice) d;
+        if (p.progIF == 0x30) {
+            IPCIIO io = BspKrMain.arch.getPciIo();
+            // xHCI 规范：BAR0/1 是 64 位内存 BAR
+            long lo = (long) io.readConfig32(p.bus, p.slot, p.func, 0x10) & 0xFFFFFFFFL;
+            long hi = (long) io.readConfig32(p.bus, p.slot, p.func, 0x14) & 0xFFFFFFFFL;
+            long barPhys = (lo & 0xFFFFFFF0L) | (hi << 32);
+            return new XhciDriver(barPhys, p.progIF);
+        }
+        StartupLogger.warn("usb: unsupported host controller type (progIF), skipped");
+        return null;
+    }
+}

@@ -1,0 +1,19 @@
+package kr.partix.kernel.io.usb;
+
+/** 控制器根端口组（树形模型的根）。 */
+class UsbRoot {
+    private IHc hc;
+    private UsbPort[] ports;
+
+    UsbRoot(IHc hc) {
+        this.hc = hc;
+        ports = new UsbPort[hc.getPortCount()];
+        for (int i = 0; i < ports.length; i++) {
+            ports[i] = new UsbPort(null, i, null);
+        }
+    }
+
+    IHc getHc() -> hc
+    int getPortCount() -> (int) ports.length
+    UsbPort getPort(int i) -> ports[i]
+}

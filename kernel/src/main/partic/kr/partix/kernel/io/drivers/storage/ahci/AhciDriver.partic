@@ -22,6 +22,9 @@ class AhciDriverTemplate implements IDiskDriver {
 
     str description() -> "AHCI SATA driver - provides block storage"
 
+    void detach() {
+    }
+
     boolean match(IDevice d) {
         if (d.getBusType() != BusType.PCI) return false;
         PCIDevice p = (PCIDevice) d;
@@ -40,6 +43,9 @@ class AhciDriver implements IDiskDriver {
     private long abar;
 
     str description() -> "AHCI SATA driver - provides block storage"
+
+    void detach() {
+    }
 
     AhciDriver(PCIDevice dev) {
         IPCIIO io = BspKrMain.arch.getPciIo();

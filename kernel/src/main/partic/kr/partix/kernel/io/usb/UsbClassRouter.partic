@@ -1,0 +1,45 @@
+package kr.partix.kernel.io.usb;
+
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.event.AEvent;
+import kr.partix.kernel.event.EventHandleResult;
+import kr.partix.kernel.event.EventId;
+import kr.partix.kernel.event.IEventListener;
+import kr.partix.kernel.event.events.DeviceEvent;
+import kr.partix.kernel.io.drivers.DriverRegistry;
+import kr.partix.kernel.io.drivers.DriverType;
+
+/**
+ * USB 类路由：设备 attach/detach 时按接口类绑定/解绑类驱动。
+ * 类 3=HID → INPUT；类 8=MassStorage → STORAGE；其余暂不绑定。
+ * v1 粒度：每设备一个实例（取第一个匹配接口）。
+ */
+class UsbClassRouter implements IEventListener {
+    int onEvent(AEvent event) {
+        if (event instanceof DeviceEvent) {
+            DeviceEvent de = (DeviceEvent) event;
+            if (de.getEventId() == EventId.DEVICE_ATTACHED) {
+                route(de.getDevice());
+            } else if (de.getEventId() == EventId.DEVICE_DETACHED) {
+                DriverRegistry.unbindDevice(de.getDevice());
+            }
+        }
+        return EventHandleResult.HANDLE_OK;
+    }
+
+    private static void route(IDevice dev) {
+        if (!(dev instanceof USBDevice)) return;
+        USBDevice usb = (USBDevice) dev;
+        USBInterface[] ifs = usb.getInterfaces();
+        if (ifs == null) return;
+        for (int i = 0; i < ifs.length; i++) {
+            int type = 0;
+            if (ifs[i].getClass() == 3) type = DriverType.INPUT;
+            else if (ifs[i].getClass() == 8) type = DriverType.STORAGE;
+            if (type != 0) {
+                DriverRegistry.bindDevice(type, dev);
+                break;
+            }
+        }
+    }
+}

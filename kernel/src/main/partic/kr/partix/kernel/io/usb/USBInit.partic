@@ -1,0 +1,11 @@
+package kr.partix.kernel.io.usb;
+
+import kr.partix.kernel.log.StartupLogger;
+
+/** USB 子系统初始化入口（控制器发现由 UsbCore 完成）。 */
+class USBInit {
+    static void init() {
+        StartupLogger.info("usb init: probing host controllers...");
+        UsbCore.init();
+    }
+}

@@ -20,6 +20,10 @@ class UnknownInterruptEventListener implements IEventListener {
                 str temp = StrUtils.toDec(ie.getVector());
                 sb.append(temp);
                 Memory.free(temp);
+                sb.append(" rip=");
+                str r = StrUtils.toHex(ie.getEpc());
+                sb.append(r);
+                Memory.free(r);
                 str builded = sb.build();
                 BspKrMain.arch.getUart().println(builded);
                 Memory.free(builded);

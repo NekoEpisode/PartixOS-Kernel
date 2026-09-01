@@ -1,0 +1,88 @@
+package kr.partix.kernel.io.usb;
+
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * 配置描述符解析：整段读回（config 0），提取接口（alt 0）与端点。
+ * HID 等其余描述符类型跳过。
+ */
+class UsbConfigParser {
+    private static final int DESC_CONFIG    = 2;
+    private static final int DESC_INTERFACE = 4;
+    private static final int DESC_ENDPOINT  = 5;
+
+    /** 解析 config 0；失败返回 null。 */
+    static USBInterface[] parse(IHc hc, int addr) {
+        // 先读 9 字节头拿 wTotalLength（offset 2，小端）
+        long hdr = Memory.malloc(9);
+        boolean ok = hc.controlTransfer(addr, 0x80, 6, 0x0200, 0, 9, hdr);
+        if (!ok) {
+            Memory.free(hdr);
+            return null;
+        }
+        int total = read16(hdr + 2);
+        Memory.free(hdr);
+        if (total < 9 || total > 4096) return null;
+
+        long blob = Memory.malloc(total);
+        ok = hc.controlTransfer(addr, 0x80, 6, 0x0200, 0, total, blob);
+        if (!ok) {
+            Memory.free((long) blob);
+            return null;
+        }
+
+        // 第一遍：数 alt 0 接口数
+        int nIf = 0;
+        int p = 0;
+        while (p + 2 <= total) {
+            int len = (int) System.read8(blob + p) & 0xFF;
+            int type = (int) System.read8(blob + p + 1) & 0xFF;
+            if (len == 0) break;
+            if (type == DESC_INTERFACE) {
+                int alt = (int) System.read8(blob + p + 3) & 0xFF;
+                if (alt == 0) nIf += 1;
+            }
+            p += len;
+        }
+
+        // 第二遍：填接口与端点
+        USBInterface[] ifs = new USBInterface[nIf];
+        int idx = 0;
+        USBInterface cur = null;
+        p = 0;
+        while (p + 2 <= total) {
+            int len = (int) System.read8(blob + p) & 0xFF;
+            int type = (int) System.read8(blob + p + 1) & 0xFF;
+            if (len == 0) break;
+            if (type == DESC_INTERFACE) {
+                int num = (int) System.read8(blob + p + 2) & 0xFF;
+                int alt = (int) System.read8(blob + p + 3) & 0xFF;
+                int cls = (int) System.read8(blob + p + 5) & 0xFF;
+                int sub = (int) System.read8(blob + p + 6) & 0xFF;
+                int proto = (int) System.read8(blob + p + 7) & 0xFF;
+                if (alt == 0) {
+                    cur = new USBInterface(num, alt, cls, sub, proto);
+                    if (idx < nIf) ifs[idx] = cur;
+                    idx += 1;
+                } else {
+                    cur = null;   // 非 0 alternate 的端点不属于 alt 0
+                }
+            } else if (type == DESC_ENDPOINT && cur != null) {
+                int epAddr = (int) System.read8(blob + p + 2) & 0xFF;
+                int attrs = (int) System.read8(blob + p + 3) & 0xFF;
+                int mps = read16(blob + p + 4);
+                int interval = (int) System.read8(blob + p + 6) & 0xFF;
+                cur.addEndpoint(new USBEndpoint(epAddr, attrs, mps, interval));
+            }
+            p += len;
+        }
+
+        Memory.free((long) blob);
+        return ifs;
+    }
+
+    private static int read16(long va) {
+        return ((int) System.read8(va) & 0xFF) | (((int) System.read8(va + 1) & 0xFF) << 8);
+    }
+}

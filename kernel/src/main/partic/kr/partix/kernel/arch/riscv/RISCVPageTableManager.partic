@@ -100,6 +100,38 @@ class RISCVPageTableManager implements IPageTableManager {
         paging_flush_tlb();
     }
 
+    /** 把 [phys, phys+size) 映射进 physmap（SV39 内核区，2MB 页，向上取整）。 */
+    void mapPhys(long phys, long size, int flags) {
+        long start = phys & ~0x1FFFFFL;
+        long end = (phys + size + 0x1FFFFFL) & ~0x1FFFFFL;
+        for (long p = start; p < end; p += 0x200000L) {
+            mapPhys2m(p, flags);
+        }
+        paging_flush_tlb();
+    }
+
+    /** 映射 physmap 内一个 2MB 页；中间表按需分配。 */
+    private void mapPhys2m(long phys, int flags) {
+        long va = MemoryLayout.kernelPhysBase() + phys;
+        int pgdIndex = (int) ((va >>> 30) & 0x1FF);
+        int pmdIndex = (int) ((va >>> 21) & 0x1FF);
+
+        long entry = (phys >> 2) | PTE_V | PTE_R | PTE_W | PTE_A | PTE_D;
+        if ((flags & PageFlags.NO_EXEC) != 0) entry &= ~PTE_X;
+
+        long pgdEntry = System.read64(pgd + (long) pgdIndex * 8);
+        long pmd;
+        if ((pgdEntry & PTE_V) == 0) {
+            pmd = allocZeroPage();
+            System.write64(pgd + (long) pgdIndex * 8,
+                    (MemoryLayout.virtToPhys(pmd) >> 2) | PTE_V);
+        } else {
+            pmd = MemoryLayout.physToVirt((pgdEntry & PTE_ADDR_MASK) << 2);
+        }
+
+        System.write64(pmd + (long) pmdIndex * 8, entry);
+    }
+
     void load() {
         long satp = SATP_MODE_SV39 | (MemoryLayout.virtToPhys(pgd) >> 12);
         paging_load_satp(satp);

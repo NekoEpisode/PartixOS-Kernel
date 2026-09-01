@@ -3,16 +3,19 @@ package kr.partix.kernel.device;
 /**
  * 设备树节点设备描述。compatible 指向 FDT 内存中的字符串
  * （FDT 内存生命周期 = 内核，不拷贝、不释放）。
+ * 支持多段 reg（如 cdns3 的 otg/xhci/dev），每段一个 MEM 资源。
  */
 class DTDevice implements IDevice {
     private final str compatible;
-    private final long addr;
-    private final long size;
+    private final long[] regAddrs;
+    private final long[] regSizes;
+    private final int regCount;
 
-    DTDevice(str compatible, long addr, long size) {
+    DTDevice(str compatible, long[] regAddrs, long[] regSizes, int regCount) {
         this.compatible = compatible;
-        this.addr = addr;
-        this.size = size;
+        this.regAddrs = regAddrs;
+        this.regSizes = regSizes;
+        this.regCount = regCount;
     }
 
     int getBusType() -> BusType.DT
@@ -23,10 +26,10 @@ class DTDevice implements IDevice {
 
     str getCompatible() -> compatible
 
-    int getResourceCount() -> 1
+    int getResourceCount() -> regCount
 
     DeviceResource getResource(int index) -> new DeviceResource(
-            DeviceResource.MEM, addr, size)
+            DeviceResource.MEM, regAddrs[index], regSizes[index])
 
     str getName() -> compatible
 }

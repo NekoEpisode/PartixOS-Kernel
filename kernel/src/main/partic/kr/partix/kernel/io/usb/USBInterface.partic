@@ -1,0 +1,43 @@
+package kr.partix.kernel.io.usb;
+
+/** USB 接口（配置描述符中 bInterfaceNumber 的一个 alternate）。 */
+class USBInterface {
+    private static final int MAX_ENDPOINTS = 16;
+
+    private final int number;
+    private final int altSetting;
+    private final int cls;
+    private final int sub;
+    private final int proto;
+    private USBEndpoint[] endpoints = new USBEndpoint[MAX_ENDPOINTS];
+    private int epCount;
+
+    USBInterface(int number, int altSetting, int cls, int sub, int proto) {
+        this.number = number;
+        this.altSetting = altSetting;
+        this.cls = cls;
+        this.sub = sub;
+        this.proto = proto;
+    }
+
+    void addEndpoint(USBEndpoint ep) {
+        if (epCount < MAX_ENDPOINTS) endpoints[epCount++] = ep;
+    }
+
+    int getNumber() -> number
+    int getAltSetting() -> altSetting
+    int getClass() -> cls
+    int getSubclass() -> sub
+    int getProtocol() -> proto
+
+    int getEndpointCount() -> epCount
+    USBEndpoint getEndpoint(int i) -> endpoints[i]
+
+    /** 第一个指定方向（1=IN 0=OUT）的端点；无则 null。 */
+    USBEndpoint findEndpoint(int dir) {
+        for (int i = 0; i < epCount; i++) {
+            if (((endpoints[i].getAddress() >> 7) & 1) == dir) return endpoints[i];
+        }
+        return null;
+    }
+}

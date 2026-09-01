@@ -30,6 +30,9 @@ class VirtioInputDriverTemplate implements IDriver {
 
     str description() -> "Virtio input driver - provides keyboard"
 
+    void detach() {
+    }
+
     boolean match(IDevice device) {
         if (device.getBusType() != BusType.PCI) return false;
         if (!(device instanceof PCIDevice)) return false;
@@ -50,6 +53,9 @@ class VirtioInputDriver implements IInputDriver, IInputDevice {
     private boolean ok;
 
     str description() -> "Virtio input driver - provides keyboard"
+
+    void detach() {
+    }
 
     private static final int VIRTIO_STATUS_ACKNOWLEDGE = 1;
     private static final int VIRTIO_STATUS_DRIVER     = 2;

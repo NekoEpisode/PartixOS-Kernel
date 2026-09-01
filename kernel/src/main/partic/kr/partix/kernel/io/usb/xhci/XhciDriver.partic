@@ -1,0 +1,650 @@
+package kr.partix.kernel.io.usb.xhci;
+
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.usb.IHc;
+import kr.partix.kernel.log.StartupLogger;
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.memory.MemoryLayout;
+import kr.partix.kernel.paging.PageFlags;
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.timer.Timer;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * xHCI 主机控制器驱动（轮询版，按标准 xHCI 规范 + u-boot xhci.h 字段布局实现）。
+ *
+ * 寄存器布局（全部从 BAR 解析，不硬编码）：
+ *   能力区   bar+0x00 CAPLENGTH / 0x04 HCSPARAMS1 / 0x10 HCCPARAMS1 /
+ *           0x14 DBOFF / 0x18 RTSOFF
+ *   操作区   bar+CAPLENGTH：USBCMD(0) USBSTS(4) CRCR(0x10) DCBAAP(0x18)
+ *           CONFIG(0x20)，端口 PORTSC = 0x400 + port*0x10
+ *   运行时区 bar+RTSOFF（中断器 0：ERSTSZ/ERSTBA/ERDP）
+ *   门铃     bar+DBOFF：DB[0]=命令门铃（写 0），DB[slot]=端点门铃（EP0 写 1）
+ */
+class XhciDriver implements IDriver, IHc {
+    // PORTSC 位（xHCI 规范 5.4.8，与 u-boot xhci.h 一致）
+    private static final int PSC_CCS  = 1 << 0;      // 当前连接状态
+    private static final int PSC_PED  = 1 << 1;      // 端口使能
+    private static final int PSC_OCA  = 1 << 3;      // 过流
+    private static final int PSC_PR   = 1 << 4;      // 端口复位
+    private static final int PSC_PP   = 1 << 9;      // 端口电源
+    private static final int PSC_SPEED_MASK = 0xf << 10;
+    private static final int PSC_CSC  = 1 << 17;     // 连接变化 RW1C
+    private static final int PSC_PEC  = 1 << 18;     // 使能变化 RW1C
+    private static final int PSC_WRC  = 1 << 19;     // 热复位变化 RW1C
+    private static final int PSC_OCC  = 1 << 20;     // 过流变化 RW1C
+    private static final int PSC_PRC  = 1 << 21;     // 复位变化 RW1C
+    private static final int PSC_PLC  = 1 << 22;     // 链路状态变化 RW1C
+    private static final int PSC_CEC  = 1 << 23;     // 配置错误变化 RW1C
+    private static final int PSC_CHANGE_MASK = PSC_CSC | PSC_PEC | PSC_WRC
+            | PSC_OCC | PSC_PRC | PSC_PLC | PSC_CEC;
+
+    private static final int CAP_HCSPARAMS1 = 0x04;
+    private static final int CAP_HCSPARAMS2 = 0x08;
+    private static final int CAP_HCSPARAMS3 = 0x0C;
+    private static final int CAP_HCCPARAMS1 = 0x10;
+    private static final int CAP_DBOFF      = 0x14;
+    private static final int CAP_RTSOFF     = 0x18;
+
+    private static final int OP_USBCMD      = 0x00;
+    private static final int OP_USBSTS      = 0x04;
+    private static final int OP_CRCR        = 0x18;
+    private static final int OP_DCBAAP      = 0x30;
+    private static final int OP_CONFIG      = 0x38;
+    private static final int OP_PORTSC_BASE = 0x400;
+    private static final int OP_PORTSC_STRIDE = 0x10;
+
+    // 运行时寄存器（中断器 0；寄存器组从 0x20 起：MFINDEX 0x00 + rsvd[7]）
+    private static final int RT_ERSTSZ = 0x28;
+    private static final int RT_ERSTBA = 0x30;
+    private static final int RT_ERDP   = 0x38;
+
+    private static final int USBCMD_RS    = 1 << 0;
+    private static final int USBCMD_HCRST = 1 << 1;
+    private static final int USBSTS_HCH   = 1 << 0;
+    private static final int USBSTS_CNR   = 1 << 11;
+
+    private static final int CRCR_RCS = 1 << 0;
+
+    private static final int EXT_CAPS_LEGACY   = 1;
+    private static final int LEGACY_BIOS_OWNED = 1 << 16;
+    private static final int LEGACY_OS_OWNED   = 1 << 24;
+
+    private static final int CC_SUCCESS  = 1;
+    private static final int CC_SHORT_TX = 13;
+
+    private static final int EV_TRANSFER        = 32;
+    private static final int EV_COMMAND_COMPLETE = 33;
+
+    private static final int CR_ENABLE_SLOT   = 9;
+    private static final int CR_ADDRESS_DEVICE = 11;
+
+    private static final int SPEED_FULL  = 1;
+    private static final int SPEED_LOW   = 2;
+    private static final int SPEED_HIGH  = 3;
+    private static final int SPEED_SUPER = 4;
+
+    private static final int RING_SIZE      = 64;
+    private static final int EVENT_RING_SIZE = 64;
+
+    private final int hcType;   // 控制器类型（PCI progIF 或 0x30=xHCI）
+
+    private long bar;
+    private long opBase;
+    private long rtBase;
+    private long dbBase;
+    private int capLength;
+    private int hcsparams1;
+    private int hcsparams2;
+    private int hcsparams3;
+    private int hccparams1;
+    private int maxSlots;
+    private int portCount;
+    private int ctxSize;         // 32 或 64
+    private boolean ok;
+
+    private long dcbaa;          // VA
+    private long dcbaaPhys;
+    private XhciRing cmdRing;
+    private XhciEventRing evRing;
+    private long erst;
+    private long erstPhys;
+    private XhciSlotState[] slots;
+
+    private int[] evBuf;
+    private int lastCmdCcode;
+    private int lastCmdSlotId;
+    private int lastTransferCcode;
+
+    XhciDriver(long barPhys, int hcType) {
+        this.hcType = hcType;
+        evBuf = new int[4];
+        initRegisters(barPhys);
+        if (!ok) return;
+        legacyHandoff();
+        controllerReset();
+        initMemory();
+    }
+
+    // ── IDriver ──
+
+    int getType() -> DriverType.USB
+    boolean match(IDevice d) -> false
+    IDriver create(IDevice d) -> this
+
+    str description() -> "xHCI USB host controller"
+
+    void detach() {
+    }
+
+    // ── IHc ──
+
+    int getHcType() -> hcType
+
+    int getPortCount() {
+        if (!ok) return 0;
+        return portCount;
+    }
+
+    boolean isPortConnected(int port) -> (readPortsc(port) & PSC_CCS) != 0
+
+    boolean isPortChanged(int port) -> (readPortsc(port) & PSC_CHANGE_MASK) != 0
+
+    void clearPortChanged(int port) {
+        // RW1C：写回 1 清除
+        System.write32(portscAddr(port), readPortsc(port) | PSC_CHANGE_MASK);
+    }
+
+    boolean resetPort(int port) {
+        if (!ok) return false;
+        long psc = portscAddr(port);
+        // 端口上电（真机端口可能默认不上电，PP 读写确认）
+        if ((readPortsc(port) & PSC_PP) == 0) {
+            System.write32(psc, readPortsc(port) | PSC_PP);
+            long deadline = Timer.getTicks() + Timer.TICK_HZ / 2;
+            while (Timer.getTicks() < deadline) {
+                if ((readPortsc(port) & PSC_PP) != 0) break;
+            }
+        }
+        // 发复位：写 PR=1；复位完成时 PRC 置位（PR 自清）
+        System.write32(psc, readPortsc(port) | PSC_PR);
+        long deadline = Timer.getTicks() + Timer.TICK_HZ / 2;
+        while (Timer.getTicks() < deadline) {
+            if ((readPortsc(port) & PSC_PRC) != 0) {
+                System.write32(psc, readPortsc(port) | PSC_PRC);   // 清 PRC
+                return (readPortsc(port) & PSC_PED) != 0;          // 链路就绪
+            }
+        }
+        return false;
+    }
+
+    /** 根端口上设备的速度（PORTSC bits 10:13）。 */
+    int getPortSpeed(int port) -> (readPortsc(port) & PSC_SPEED_MASK) >>> 10
+
+    /** 让路由链末端设备获得地址：Enable Slot → Address Device。返回 USB 地址（=槽 ID），失败 0。 */
+    int addressDevice(int port, long route, int speed, int ttSlot, int ttPort) {
+        if (!ok) { uart("xhci: address !ok"); return 0; }
+        int slot = enableSlot();
+        if (slot <= 0) { uart("xhci: attach enable slot failed"); return 0; }
+        if (!setupSlot(slot, port, speed, route, ttSlot, ttPort)) {
+            uart("xhci: attach address device failed");
+            return 0;
+        }
+        return slot;
+    }
+
+    /** 同步控制传输（枚举 / 类请求）。data 为缓冲区 VA（IN 写回 / OUT 读出），wLength=0 时可为 0。 */
+    boolean controlTransfer(int addr, int bmRequestType, int bRequest,
+                            int wValue, int wIndex, int wLength, long data) {
+        if (!ok || slots == null) return false;
+        XhciSlotState st = slots[addr];
+        if (st == null || !st.addressed) return false;
+        XhciRing ring = st.ep0Ring;
+        boolean in = (bmRequestType & 0x80) != 0;
+
+        // setup 包 8 字节，小端打包进 64 位参数
+        long setup = ((long) bmRequestType & 0xff)
+                | (((long) bRequest & 0xff) << 8)
+                | (((long) wValue & 0xffff) << 16)
+                | (((long) wIndex & 0xffff) << 32)
+                | (((long) wLength & 0xffff) << 48);
+
+        long dataPhys = 0;
+        if (wLength > 0 && data != 0) dataPhys = MemoryLayout.virtToPhys(data);
+
+        int nTrbs = 0;
+
+        // Setup TRB：IDT（立即数据）、CHAIN、TRT（有数据阶段时：2=OUT 3=IN）
+        long trb = ring.next();
+        if (trb == 0) return false;
+        int trt = 0;
+        if (wLength > 0) {
+            if (in) trt = 3 << 16;
+            else trt = 2 << 16;
+        }
+        ring.writeTrb(trb, setup, 8,
+                XhciRing.trbType(XhciRing.TRB_SETUP) | XhciRing.TRB_IDT
+                        | XhciRing.TRB_CHAIN | trt);
+        ring.commit();
+        nTrbs += 1;
+
+        // Data TRB（可选）
+        if (wLength > 0 && dataPhys != 0) {
+            trb = ring.next();
+            if (trb == 0) return false;
+            int dir = 0;
+            if (in) dir = XhciRing.TRB_DIR_IN;
+            ring.writeTrb(trb, dataPhys, wLength & 0x1ffff,
+                    XhciRing.trbType(XhciRing.TRB_DATA) | XhciRing.TRB_CHAIN | dir);
+            ring.commit();
+            nTrbs += 1;
+        }
+
+        // Status TRB：方向与数据阶段相反（无数据阶段为 IN），IOC 触发完成事件
+        trb = ring.next();
+        if (trb == 0) return false;
+        int statusDir = XhciRing.TRB_DIR_IN;
+        if (wLength > 0 && in) statusDir = 0;
+        ring.writeTrb(trb, 0, 0,
+                XhciRing.trbType(XhciRing.TRB_STATUS) | XhciRing.TRB_IOC | statusDir);
+        ring.commit();
+        nTrbs += 1;
+
+        ringEpDoorbell(addr);
+        boolean done = waitTransferEvent(addr);
+        for (int i = 0; i < nTrbs; i++) ring.complete();
+        if (!done) return false;
+        return lastTransferCcode == CC_SUCCESS || lastTransferCcode == CC_SHORT_TX;
+    }
+
+    // ── 命令与事件 ──
+
+    private int enableSlot() {
+        long trb = cmdRing.next();
+        if (trb == 0) return 0;
+        cmdRing.writeTrb(trb, 0, 0,
+                XhciRing.trbType(CR_ENABLE_SLOT) | XhciRing.TRB_IOC);
+        cmdRing.commit();
+        ringCommandDoorbell();
+        if (!waitCommandComplete()) {
+            uart("xhci: enable slot cmd timeout");
+            return 0;
+        }
+        cmdRing.complete();
+        if (lastCmdCcode != CC_SUCCESS) {
+            StrBuilder sb = new StrBuilder();
+            sb.append("xhci: enable slot ccode=");
+            str c = StrUtils.toHex((long) lastCmdCcode);
+            sb.append(c);
+            Memory.free(c);
+            str m = sb.build();
+            uart(m);
+            Memory.free(m);
+            sb.dispose();
+            return 0;
+        }
+        return lastCmdSlotId;
+    }
+
+    private boolean setupSlot(int slot, int port, int speed, long route, int ttSlot, int ttPort) {
+        XhciSlotState st = new XhciSlotState();
+        st.slotId = slot;
+        st.ep0Ring = new XhciRing(RING_SIZE);
+        st.outCtx = allocAligned(32 * ctxSize, 64);
+        st.outCtxPhys = MemoryLayout.virtToPhys(st.outCtx);
+        zero(st.outCtx, 32 * ctxSize);
+        slots[slot] = st;
+        // 输出设备上下文指针 → DCBAA（槽 ID 直接索引，u-boot/QEMU 同布局）
+        write64(dcbaa, (long) slot * 8, st.outCtxPhys);
+
+        // 输入上下文：control(32 固定) + slot(ctxSize) + ep0(ctxSize)
+        long inCtx = allocAligned(32 + 2 * ctxSize, 64);
+        long inCtxPhys = MemoryLayout.virtToPhys(inCtx);
+        zero(inCtx, 32 + 2 * ctxSize);
+
+        int mps;
+        if (speed == SPEED_LOW) mps = 8;
+        else if (speed == SPEED_SUPER) mps = 512;
+        else mps = 64;
+
+        // control ctx：DW0=0（drop），DW1=3（add slot+ep0）
+        System.write32(inCtx + 4, 3);
+        // slot ctx（inCtx+32）：DW0 = route[19:0] | speed[23:20] | context entries=1[31:27]；
+        //                      DW1 = 根端口号[23:16]；DW2 = TT slot[7:0] | TT port[15:8]
+        System.write32(inCtx + 32, (int) route | (speed << 20) | (1 << 27));
+        System.write32(inCtx + 36, ((port + 1) & 0xff) << 16);
+        System.write32(inCtx + 40, (ttSlot & 0xff) | ((ttPort & 0xff) << 8));
+        // ep0 ctx（inCtx + 32 + ctxSize）：DW1 = EP Type=CTRL[5:3] | CErr=3[2:1] | MaxPacket[31:16]
+        long ep0Base = inCtx + 32 + ctxSize;
+        System.write32(ep0Base + 4, (4 << 3) | (3 << 1) | (mps << 16));
+        // ep0 ctx：DW2/3 = ep0 传输环物理地址 | DCS=1
+        long ringPhys = st.ep0Ring.getPhys();
+        System.write32(ep0Base + 8, (int) ringPhys | 1);
+        System.write32(ep0Base + 12, (int) (ringPhys >>> 32));
+
+        long trb = cmdRing.next();
+        if (trb == 0) return false;
+        cmdRing.writeTrb(trb, inCtxPhys, 0,
+                XhciRing.trbType(CR_ADDRESS_DEVICE) | XhciRing.TRB_IOC
+                        | (slot << 24));
+        cmdRing.commit();
+        ringCommandDoorbell();
+        if (!waitCommandComplete()) {
+            uart("xhci: address device cmd timeout");
+            return false;
+        }
+        cmdRing.complete();
+        if (lastCmdCcode != CC_SUCCESS) {
+            StrBuilder sb = new StrBuilder();
+            sb.append("xhci: address device ccode=");
+            str c = StrUtils.toHex((long) lastCmdCcode);
+            sb.append(c);
+            Memory.free(c);
+            str m = sb.build();
+            uart(m);
+            Memory.free(m);
+            sb.dispose();
+            return false;
+        }
+        st.addressed = true;
+        return true;
+    }
+
+    /** 等命令完成事件。返回后 lastCmdCcode/lastCmdSlotId 有效。 */
+    private boolean waitCommandComplete() {
+        long deadline = Timer.getTicks() + Timer.TICK_HZ;
+        while (Timer.getTicks() < deadline) {
+            boolean any = false;
+            while (evRing.poll(evBuf)) {
+                any = true;
+                int type = (evBuf[3] >>> 10) & 0x3f;
+                if (type == EV_COMMAND_COMPLETE) {
+                    lastCmdCcode = (evBuf[2] >>> 24) & 0xff;
+                    lastCmdSlotId = (evBuf[3] >>> 24) & 0xff;
+                    ackEventRing();
+                    return true;
+                }
+            }
+            if (any) ackEventRing();
+        }
+        return false;
+    }
+
+    /** 等指定槽的传输完成事件。返回后 lastTransferCcode 有效。 */
+    private boolean waitTransferEvent(int slot) {
+        long deadline = Timer.getTicks() + Timer.TICK_HZ;
+        while (Timer.getTicks() < deadline) {
+            boolean any = false;
+            while (evRing.poll(evBuf)) {
+                any = true;
+                int type = (evBuf[3] >>> 10) & 0x3f;
+                if (type == EV_TRANSFER) {
+                    int evSlot = (evBuf[3] >>> 24) & 0xff;
+                    if (evSlot == slot) {
+                        lastTransferCcode = (evBuf[2] >>> 24) & 0xff;
+                        ackEventRing();
+                        return true;
+                    }
+                }
+            }
+            if (any) ackEventRing();
+        }
+        return false;
+    }
+
+    private void ringCommandDoorbell() {
+        System.write32(dbBase, 0);   // DB[0]：命令门铃
+    }
+
+    private void ringEpDoorbell(int slot) {
+        System.write32(dbBase + (long) slot * 4, 1);   // EP0 target=1
+    }
+
+    /** 消费完事件后更新 ERDP（写新位置 + EHB 置位清忙）。 */
+    private void ackEventRing() {
+        long deq = evRing.getDequeuePhys() | (1 << 3);
+        System.write32(rtBase + RT_ERDP, (int) deq);
+        System.write32(rtBase + RT_ERDP + 4, (int) (deq >>> 32));
+    }
+
+    // ── 初始化 ──
+
+    private void initRegisters(long barPhys) {
+        if (barPhys == 0) {
+            StartupLogger.warn("xhci: no MMIO base");
+            return;
+        }
+        // 高位 MMIO（真机 64 位 BAR 常在 4GB 以上）不在 physmap 初始覆盖内，按需映射
+        StrBuilder dbg = new StrBuilder();
+        dbg.append("xhci: init barPhys=");
+        dbg.append(StrUtils.toHex(barPhys));
+        str dm = dbg.build();
+        uart(dm);
+        Memory.free(dm);
+        dbg.dispose();
+        BspKrMain.arch.getPageTableManager().mapPhys(barPhys, 0x200000L, PageFlags.WRITABLE);
+        bar = MemoryLayout.physToVirt(barPhys);
+        StrBuilder dbg2 = new StrBuilder();
+        dbg2.append("xhci: bar=");
+        dbg2.append(StrUtils.toHex(bar));
+        dbg2.append(" reading caps...");
+        str dm2 = dbg2.build();
+        uart(dm2);
+        Memory.free(dm2);
+        dbg2.dispose();
+        capLength = (int) System.read8(bar + 0) & 0xFF;
+        hcsparams1 = System.read32(bar + CAP_HCSPARAMS1);
+        hcsparams2 = System.read32(bar + CAP_HCSPARAMS2);
+        hcsparams3 = System.read32(bar + CAP_HCSPARAMS3);
+        hccparams1 = System.read32(bar + CAP_HCCPARAMS1);
+        StrBuilder dbg3 = new StrBuilder();
+        dbg3.append("xhci: capLen=");
+        dbg3.append(StrUtils.toHex((long) capLength));
+        dbg3.append(" hcsp1=");
+        dbg3.append(StrUtils.toHex((long) hcsparams1));
+        str dm3 = dbg3.build();
+        uart(dm3);
+        Memory.free(dm3);
+        dbg3.dispose();
+        maxSlots = hcsparams1 & 0xff;
+        portCount = (hcsparams1 >>> 24) & 0xff;   // MaxPorts [31:24]
+        if ((hccparams1 & (1 << 2)) != 0) ctxSize = 64;
+        else ctxSize = 32;
+        opBase = bar + (long) capLength;
+        long dboff = (long) System.read32(bar + CAP_DBOFF) & 0xFFFFFFFFL;
+        long rtsoff = (long) System.read32(bar + CAP_RTSOFF) & 0xFFFFFFFFL;
+        dbBase = bar + dboff;
+        rtBase = bar + rtsoff;
+        ok = capLength > 0 && portCount > 0 && maxSlots > 0;
+        logInit();
+    }
+
+    /** xECP 遍历：USB Legacy 支持（BIOS/旧栈接管，真机必需；QEMU 无此能力自动跳过）。
+     * 注意：xECP 指针是 32 位字偏移，地址 = bar + xecp * 4。 */
+    private void legacyHandoff() {
+        uart("xhci: legacy handoff");
+        int xecp = (hccparams1 >>> 16) & 0xffff;
+        while (xecp != 0) {
+            long capVa = bar + (long) xecp * 4;
+            int capId = System.read32(capVa) & 0xff;
+            if (capId == EXT_CAPS_LEGACY) {
+                long sup = capVa;                 // USBLEGSUP
+                long ctl = capVa + 4;             // USBLEGCTL
+                if ((System.read32(sup) & LEGACY_BIOS_OWNED) != 0) {
+                    System.write32(ctl, System.read32(ctl) | LEGACY_OS_OWNED);
+                    long deadline = Timer.getTicks() + Timer.TICK_HZ;
+                    while (Timer.getTicks() < deadline) {
+                        if ((System.read32(sup) & LEGACY_BIOS_OWNED) == 0) break;
+                    }
+                }
+                return;
+            }
+            xecp = (System.read32(capVa) >>> 8) & 0xff;
+        }
+    }
+
+    private void controllerReset() {
+        uart("xhci: controller reset start");
+        // 先停（若 BIOS 留在运行态），再 HCRST
+        if ((System.read32(opBase + OP_USBSTS) & USBSTS_HCH) == 0) {
+            System.write32(opBase + OP_USBCMD, 0);   // RS=0
+            long deadline = Timer.getTicks() + Timer.TICK_HZ;
+            while (Timer.getTicks() < deadline) {
+                if ((System.read32(opBase + OP_USBSTS) & USBSTS_HCH) != 0) break;
+            }
+        }
+        uart("xhci: hcrst");
+        System.write32(opBase + OP_USBCMD, USBCMD_HCRST);
+        long deadline = Timer.getTicks() + Timer.TICK_HZ;
+        while (Timer.getTicks() < deadline) {
+            if ((System.read32(opBase + OP_USBCMD) & USBCMD_HCRST) == 0) break;
+        }
+        deadline = Timer.getTicks() + Timer.TICK_HZ;
+        while (Timer.getTicks() < deadline) {
+            if ((System.read32(opBase + OP_USBSTS) & USBSTS_CNR) == 0) break;
+        }
+        uart("xhci: reset done");
+    }
+
+    private void initMemory() {
+        uart("xhci: init memory start");
+        // DCBAA：槽 ID 直接索引；DCBAA[0] 放 scratchpad 数组（u-boot 布局）
+        dcbaa = allocAligned((maxSlots + 1) * 8, 64);
+        dcbaaPhys = MemoryLayout.virtToPhys(dcbaa);
+        zero(dcbaa, (maxSlots + 1) * 8);
+
+        int scratch = ((hcsparams2 >>> 16) & 0x3e0) | ((hcsparams2 >>> 27) & 0x1f);
+        if (scratch > 0) {
+            // scratchpad 缓冲大小来自 HCSPARAMS3[15:0]（0 时按 4096）
+            int spSize = hcsparams3 & 0xffff;
+            if (spSize == 0) spSize = 4096;
+            long spArray = allocAligned(scratch * 8, 64);
+            for (int i = 0; i < scratch; i++) {
+                long sp = allocAligned(spSize, 64);
+                write64(spArray, (long) i * 8, MemoryLayout.virtToPhys(sp));
+            }
+            write64(dcbaa, 0, MemoryLayout.virtToPhys(spArray));
+        }
+
+        // 命令环（停态写 CRCR）
+        cmdRing = new XhciRing(RING_SIZE);
+        write64(opBase + OP_CRCR, 0, cmdRing.getPhys() | CRCR_RCS);
+
+        // 事件环（停态写 ERST/ERDP）
+        evRing = new XhciEventRing(EVENT_RING_SIZE);
+        erst = allocAligned(16, 64);
+        erstPhys = MemoryLayout.virtToPhys(erst);
+        System.write32(erst, (int) evRing.getPhys());
+        System.write32(erst + 4, (int) (evRing.getPhys() >>> 32));
+        System.write32(erst + 8, EVENT_RING_SIZE);
+        System.write32(erst + 12, 0);
+        System.write32(rtBase + RT_ERSTSZ, 1);
+        write64(rtBase + RT_ERSTBA, 0, erstPhys);
+        write64(rtBase + RT_ERDP, 0, evRing.getPhys());
+
+        write64(opBase + OP_DCBAAP, 0, dcbaaPhys);
+        System.write32(opBase + OP_CONFIG, maxSlots);
+
+        // 启动
+        System.write32(opBase + OP_USBCMD, USBCMD_RS);
+        long deadline = Timer.getTicks() + Timer.TICK_HZ;
+        while (Timer.getTicks() < deadline) {
+            if ((System.read32(opBase + OP_USBSTS) & USBSTS_HCH) == 0) break;
+        }
+
+        cdns3PlatStart();
+
+        slots = new XhciSlotState[maxSlots + 1];
+
+        // 端口上电（真机 cdns3 端口可能默认不上电；PPC=0 时写 1 无副作用）+
+        // 诊断：逐端口打印 PORTSC
+        for (int p = 0; p < portCount; p++) {
+            System.write32(portscAddr(p), readPortsc(p) | PSC_PP);
+            long dl = Timer.getTicks() + Timer.TICK_HZ / 10;
+            while (Timer.getTicks() < dl) {
+                if ((readPortsc(p) & PSC_PP) != 0) break;
+            }
+            StrBuilder dbg = new StrBuilder();
+            dbg.append("xhci: port ");
+            str ps = StrUtils.toDec(p);
+            dbg.append(ps);
+            Memory.free(ps);
+            dbg.append(" sc=");
+            dbg.append(StrUtils.toHex((long) readPortsc(p)));
+            str dm = dbg.build();
+            uart(dm);
+            Memory.free(dm);
+            dbg.dispose();
+        }
+
+        logReady();
+    }
+
+    // ── 工具 ──
+
+    /** cdns3 专属 xHCI 启动配置（对齐 Linux xhci_cdns3_plat_start，U-Boot 缺失）：
+     *  USBCMD.EU3S + XECP 寄存器（RxDetect P3 使能 / LPM→STB 切换）。 */
+    private void cdns3PlatStart() {
+        System.write32(opBase + OP_USBCMD, System.read32(opBase + OP_USBCMD) | 0x10);
+        System.write32(bar + 0x8120, System.read32(bar + 0x8120) | (1 << 15));
+        System.write32(bar + 0x8000, System.read32(bar + 0x8000) | (1 << 25));
+        uart("xhci: cdns3 plat start done");
+    }
+
+    private void uart(str msg) {
+        BspKrMain.arch.getUart().println(msg);
+    }
+
+    private long portscAddr(int port) -> opBase + OP_PORTSC_BASE + (long) port * OP_PORTSC_STRIDE
+
+    private int readPortsc(int port) -> System.read32(portscAddr(port))
+
+    private static long allocAligned(int size, int align) {
+        long raw = Memory.malloc(size + align);
+        return (raw + align - 1) & ~(long) (align - 1);
+    }
+
+    private static void zero(long va, int len) {
+        for (int i = 0; i < len; i++) System.write8(va + i, (byte) 0);
+    }
+
+    private static void write64(long base, long off, long val) {
+        System.write32(base + off, (int) val);
+        System.write32(base + off + 4, (int) (val >>> 32));
+    }
+
+    private void logInit() {
+        if (!ok) return;
+        StrBuilder sb = new StrBuilder();
+        sb.append("xhci: bar=");
+        sb.append(StrUtils.toHex(MemoryLayout.virtToPhys(bar)));
+        sb.append(" ports=");
+        str ps = StrUtils.toDec(portCount);
+        sb.append(ps);
+        Memory.free(ps);
+        sb.append(" slots=");
+        str ms = StrUtils.toDec(maxSlots);
+        sb.append(ms);
+        Memory.free(ms);
+        str msg = sb.build();
+        StartupLogger.info(msg);
+        Memory.free(msg);
+        sb.dispose();
+    }
+
+    private void logReady() {
+        StrBuilder sb = new StrBuilder();
+        sb.append("xhci: ready ports=");
+        str ps = StrUtils.toDec(portCount);
+        sb.append(ps);
+        Memory.free(ps);
+        str msg = sb.build();
+        StartupLogger.info(msg);
+        Memory.free(msg);
+        sb.dispose();
+    }
+}

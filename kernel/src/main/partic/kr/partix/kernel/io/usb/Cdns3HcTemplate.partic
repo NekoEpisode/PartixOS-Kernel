@@ -1,0 +1,57 @@
+package kr.partix.kernel.io.usb;
+
+import kr.partix.kernel.device.BusType;
+import kr.partix.kernel.device.IDevice;
+import kr.partix.kernel.io.drivers.DriverType;
+import kr.partix.kernel.io.drivers.IDriver;
+import kr.partix.kernel.io.usb.xhci.XhciDriver;
+import kr.partix.kernel.main.BspKrMain;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * Cadence USB3（cdns,usb3）主机控制器模板：设备树平台设备（非 PCI）。
+ * reg 三段：otg / xhci / dev；xhci 段（索引 1）即标准 xHCI 寄存器区，
+ * 基址从设备资源读取（与 DWMMC 同模式，不硬编码）。
+ */
+class Cdns3HcTemplate implements IDriver {
+    int getType() -> DriverType.USB
+
+    str description() -> "Cadence USB3 host controller (cdns,usb3)"
+
+    void detach() {
+    }
+
+    boolean match(IDevice device) {
+        if (device.getBusType() != BusType.DT) return false;
+        str c = device.getCompatible();
+        if (c == null) return false;
+        return StrUtils.equals(c, "cdns,usb3");
+    }
+
+    IDriver create(IDevice d) {
+        // reg 顺序（reg-names）：otg[0] xhci[1] dev[2]
+        if (d.getResourceCount() < 2) {
+            uart("cdns3: regs<2, skip");
+            return null;
+        }
+        StrBuilder sb = new StrBuilder();
+        sb.append("cdns3: regs=");
+        sb.append(StrUtils.toDec(d.getResourceCount()));
+        sb.append(" otg=");
+        sb.append(StrUtils.toHex(d.getResource(0).start));
+        sb.append(" xhci=");
+        sb.append(StrUtils.toHex(d.getResource(1).start));
+        str m = sb.build();
+        uart(m);
+        Memory.free(m);
+        sb.dispose();
+        Jh7110UsbPlatform.initUsb(d.getResource(0).start);
+        return new XhciDriver(d.getResource(1).start, 0x30);
+    }
+
+    private static void uart(str msg) {
+        BspKrMain.arch.getUart().println(msg);
+    }
+}

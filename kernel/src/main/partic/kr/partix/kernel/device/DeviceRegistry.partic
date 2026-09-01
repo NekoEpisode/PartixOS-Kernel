@@ -1,40 +1,62 @@
 package kr.partix.kernel.device;
 
+import lang.partic.stdlib.additional.collection.list.ArrayList;
+import lang.partic.stdlib.additional.collection.list.List;
 import lang.partic.stdlib.additional.utils.StrUtils;
 
 /**
- * 设备注册中心：所有发现机制（PCI 枚举、平台代码、FDT 遍历）把设备
- * 注册到这里，消费端（DriverRegistry/ScreenRegistry）只查这里。
- * 设备对象由注册中心持有 = 内核生命周期，不释放。
+ * 设备注册中心：所有发现机制（PCI 枚举、平台代码、FDT 遍历、USB 枚举）
+ * 把设备注册到这里，消费端（DriverRegistry/ScreenRegistry）只查这里。
+ * 内部用 ArrayList 持有设备；unregister 只移除、不释放对象（所有权归调用方）。
  */
 class DeviceRegistry {
-    private static final int SLOTS = 256;
-    private static IDevice[] devices = new IDevice[SLOTS];
-    private static int count;
+    private static List<IDevice> devices;
 
-    static void register(IDevice dev) {
-        if (dev == null || count >= SLOTS) return;
-        devices[count] = dev;
-        count += 1;
+    private static List<IDevice> list() {
+        if (devices == null) devices = new ArrayList<IDevice>();
+        return devices;
     }
 
-    static int getCount() -> count
-    static IDevice get(int index) -> devices[index]
+    static void register(IDevice dev) {
+        if (dev == null) return;
+        List<IDevice> l = list();
+        if (!l.contains(dev)) l.add(dev);
+    }
+
+    /** 移除设备（热拔插）；返回是否移除成功。 */
+    static boolean unregister(IDevice dev) {
+        if (dev == null) return false;
+        return list().remove(dev) != null;
+    }
+
+    static int getCount() -> list().size()
+    static IDevice get(int index) -> list().get(index)
 
     static IDevice[] getAll() {
-        IDevice[] result = new IDevice[count];
-        for (int i = 0; i < count; i++) result[i] = devices[i];
+        List<IDevice> l = list();
+        IDevice[] result = new IDevice[l.size()];
+        for (int i = 0; i < l.size(); i++) result[i] = l.get(i);
         return result;
     }
 
     /** 按总线类型 + compatible（内容比较）查找设备，找不到返回 null。 */
     static IDevice findByCompatible(int busType, str compatible) {
-        for (int i = 0; i < count; i++) {
-            IDevice d = devices[i];
-            if (d == null) continue;
+        List<IDevice> l = list();
+        for (int i = 0; i < l.size(); i++) {
+            IDevice d = l.get(i);
             if (d.getBusType() == busType && StrUtils.equals(d.getCompatible(), compatible)) {
                 return d;
             }
+        }
+        return null;
+    }
+
+    /** 按 VID/PID 查找设备，找不到返回 null。 */
+    static IDevice findByVidPid(int vendorId, int deviceId) {
+        List<IDevice> l = list();
+        for (int i = 0; i < l.size(); i++) {
+            IDevice d = l.get(i);
+            if (d.getVendorId() == vendorId && d.getDeviceId() == deviceId) return d;
         }
         return null;
     }

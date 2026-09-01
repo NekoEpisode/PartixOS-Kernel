@@ -24,6 +24,9 @@ class VirtioGpuDriverTemplate implements IDisplayDriver {
 
     str description() -> "Virtio GPU driver - provides virtual display"
 
+    void detach() {
+    }
+
     boolean match(IDevice device) ->
         device.getBusType() == BusType.PCI
         && device.getVendorId() == 0x1AF4 && device.getDeviceId() == 0x1050
@@ -38,6 +41,9 @@ class VirtioGpuDriver implements IDisplayDriver {
     private IScreen[] screens;
 
     str description() -> "Virtio GPU driver - provides virtual display"
+
+    void detach() {
+    }
 
     private static final int VIRTIO_STATUS_ACKNOWLEDGE = 1;
     private static final int VIRTIO_STATUS_DRIVER     = 2;

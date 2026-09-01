@@ -1,0 +1,326 @@
+package kr.partix.kernel.io.usb;
+
+import kr.partix.kernel.log.StartupLogger;
+import kr.partix.kernel.memory.MemoryLayout;
+import kr.partix.kernel.sys.System;
+import kr.partix.kernel.timer.Timer;
+import lang.partic.stdlib.additional.utils.StrBuilder;
+import lang.partic.stdlib.additional.utils.StrUtils;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * JH7110（Milk-V Mars / VisionFive 2）Cadence USB3 板级初始化。
+ * 对应 U-Boot drivers/usb/cdns3/cdns3-starfive.c：USB 模式/PHY 走
+ * stg/sys syscon，时钟门在 STG CRG，复位释放走 STG CRG。
+ * U-Boot 通常不预初始化 cdns3（usb start 才启动），内核启动时
+ * xHCI 块无时钟且在复位态——MMIO 读会挂总线，必须先跑这里。
+ */
+class Jh7110UsbPlatform {
+    // CRG（时钟 + 复位）与 syscon 基址（物理地址）
+    private static final long SYS_CLKGEN  = 0x13020000L;
+    private static final long STG_CRG     = 0x10230000L;
+    private static final long STG_SYSCON  = 0x10240000L;
+    private static final long SYS_SYSCON  = 0x13030000L;
+    private static final long SYS_GPIO    = 0x13040000L;
+    private static final long PHY2_BASE   = 0x10200000L;
+    private static final long PHY3_BASE   = 0x10210000L;
+
+    private static final long STG_RESET_ASSERT = 0x74;
+    private static final long STG_RESET_STATUS = 0x78;
+
+    // 时钟门：STG_OFFSET(id) = (id - 190) * 4，gate 位 = bit31
+    private static final int CLK_REG_BASE = 190;
+    private static final int CLK_GATE = 1 << 31;
+    private static final int CLK_USB_APB     = 191;
+    private static final int CLK_UTMI_APB    = 192;
+    private static final int CLK_USB_AXI     = 193;
+    private static final int CLK_LPM         = 194;
+    private static final int CLK_STB         = 195;
+    private static final int CLK_APP_125     = 196;
+
+    // 复位：USB 全在 STGCRG 组（id/32 = 4），位 = 1 << (id%32)
+    private static final int RST_USB_AXI     = 135;   // bit 7
+    private static final int RST_USB_APB     = 136;   // bit 8
+    private static final int RST_USB_UTMI_APB = 137;  // bit 9
+    private static final int RST_USB_PWRUP   = 138;   // bit 10
+
+    // stg syscon 位（cdns3-starfive.c）
+    private static final int USB_STRAP_HOST        = 2 << 0x10;
+    private static final int USB_STRAP_MASK        = 0x70000;
+    private static final int USB_SUSPENDM_HOST     = 1 << 0x13;
+    private static final int USB_SUSPENDM_MASK     = 0x80000;
+    private static final int USB_SUSPENDM_BYPS     = 1 << 0x14;
+    private static final int USB_PLL_EN            = 1 << 0x16;
+    private static final int USB_REFCLK_MODE       = 1 << 0x17;
+    private static final int USB_PDRSTN_SPLIT      = 1 << 0x11;
+    private static final int PCIE_CKREF_SRC_MASK   = 0xC0000;
+    private static final int PCIE_CLK_SEL_MASK     = 0x300000;
+    private static final int PCIE_PHY_MODE_MASK    = 0x300000;
+    private static final int PCIE_USB3_BUS_WIDTH   = 0xC;
+    private static final int PCIE_USB3_RATE        = 0x60;
+    private static final int PCIE_USB3_RX_STANDBY  = 0x80;
+    private static final int PCIE_USB3_PHY_ENABLE  = 0x10;
+
+    private static final long USB_LS_KEEPALIVE_OFF = 0x4;
+    private static final long USB3_PHY_PLL_CTL_OFF = 0x7c;
+
+    // SYS GPIO pin 25 → USB_DRIVE_VBUS（Mars dts usb0_pins，GPOUT_SYS_USB_DRIVE_VBUS=7）
+    private static final int VBUS_PIN = 25;
+    private static final int VBUS_DOUT_SIGNAL = 7;
+
+    static void initUsb(long otgBase) {
+        StartupLogger.info("jh7110-usb: platform init");
+        enableVbus();
+        modeAndPhy();
+        enableClocks();
+        deassertResets();
+        set125m();
+        setPhyRegs();
+        switchHost(otgBase);
+        // 核心上电 + PHY 锁定需时间，多等一会
+        long deadline = Timer.getTicks() + Timer.TICK_HZ / 5;
+        while (Timer.getTicks() < deadline) {
+        }
+    }
+
+    /** cdns3 OTG 切 host：写 OTGCMD（HOST_BUS_REQ|OTG_DIS）→ 等 XHCI_READY。
+     * 版本检测同 U-Boot cdns3_drd_init（offset0 读 0 = v0，否则 v1）。 */
+    private static void switchHost(long otgBase) {
+        long otg = MemoryLayout.physToVirt(otgBase);
+        int did = System.read32(otg);
+        int cmdOff;
+        int simulateOff;
+        if (did == 0) {
+            cmdOff = 0x00;
+            simulateOff = 0x30;
+        } else {
+            cmdOff = 0x10;
+            simulateOff = 0x38;
+        }
+        System.write32(otg + simulateOff, 1);
+        System.write32(otg + cmdOff, (1 << 1) | (1 << 3));   // HOST_BUS_REQ | OTG_DIS
+        long deadline = Timer.getTicks() + Timer.TICK_HZ;
+        int sts = 0;
+        while (Timer.getTicks() < deadline) {
+            sts = System.read32(otg + cmdOff + 4);
+            if ((sts & (1 << 26)) != 0) break;   // OTGSTS_XHCI_READY
+        }
+        StrBuilder sb = new StrBuilder();
+        sb.append("jh7110-usb: otg did=0x");
+        sb.append(StrUtils.toHex((long) did));
+        sb.append(" sts=0x");
+        sb.append(StrUtils.toHex((long) sts));
+        str m = sb.build();
+        StartupLogger.info(m);
+        Memory.free(m);
+        sb.dispose();
+    }
+
+    /** USB_125M = pll0_out / div（ONE_BASED 分频：val=8 → ÷8）。
+     * PLL0 配置在 SYS_SYSCON（0x13030000），公式同 U-Boot jh7110_pllx_recalc_rate：
+     * pll0 = osc(24M) * fbdiv / (prediv * (1<<postdiv1))。 */
+    private static void set125m() {
+        long syscon = MemoryLayout.physToVirt(SYS_SYSCON);
+        int fbdiv = System.read32(syscon + 0x1C) & 0xFFF;
+        int prediv = System.read32(syscon + 0x24) & 0x3F;
+        int postdiv1 = 1 << ((System.read32(syscon + 0x20) >>> 28) & 0x3);
+        long pll0 = 0;
+        if (fbdiv > 0 && prediv > 0) {
+            pll0 = 24000000L * (long) fbdiv / ((long) prediv * (long) postdiv1);
+        }
+        int div = (int) (pll0 / 125000000L);
+        if (div < 1) div = 1;
+        if (div > 15) div = 15;
+        long reg = MemoryLayout.physToVirt(SYS_CLKGEN) + (long) 95 * 4;
+        int old = System.read32(reg);
+        if ((old & 0xF) == 0) {
+            System.write32(reg, (old & ~0xF) | div);
+        }
+        StrBuilder sb = new StrBuilder();
+        sb.append("jh7110-usb: pll0=");
+        sb.append(StrUtils.longToStr(pll0));
+        sb.append(" div=");
+        str ds = StrUtils.toDec(div);
+        sb.append(ds);
+        Memory.free(ds);
+        sb.append(" 125m reg old=0x");
+        sb.append(StrUtils.toHex((long) old));
+        sb.append(" new=0x");
+        sb.append(StrUtils.toHex((long) System.read32(reg)));
+        str m = sb.build();
+        StartupLogger.info(m);
+        Memory.free(m);
+        sb.dispose();
+    }
+
+    /** USB 模式（host）+ UTMI/pipe PHY 配置（stg/sys syscon）。 */
+    private static void modeAndPhy() {
+        long stg = MemoryLayout.physToVirt(STG_SYSCON);
+        long sys = MemoryLayout.physToVirt(SYS_SYSCON);
+        setBits(stg + 0x4, USB_SUSPENDM_BYPS);
+        setBits(stg + 0x4, USB_PLL_EN);
+        setBits(stg + 0x4, USB_REFCLK_MODE);
+        clearBits(stg + 0xc4, PCIE_CKREF_SRC_MASK);
+        clearBits(stg + 0xc4, PCIE_CLK_SEL_MASK);
+        setField(stg + 0x148, 0x100000, PCIE_PHY_MODE_MASK);   // mode=1（USB3），勿写 0x300000
+        clearBits(stg + 0x1f4, PCIE_USB3_BUS_WIDTH);
+        clearBits(stg + 0x1f4, PCIE_USB3_RATE);
+        clearBits(stg + 0x1f4, PCIE_USB3_RX_STANDBY);
+        setBits(stg + 0x1f4, PCIE_USB3_PHY_ENABLE);
+        setBits(sys + 0x18, USB_PDRSTN_SPLIT);   // U-Boot usb2 phy set_mode 置 1
+        setField(stg + 0x4, USB_STRAP_HOST, USB_STRAP_MASK);
+        setField(stg + 0x4, USB_SUSPENDM_HOST, USB_SUSPENDM_MASK);
+        StrBuilder sb = new StrBuilder();
+        sb.append("jh7110-usb: stg4=");
+        sb.append(StrUtils.toHex((long) System.read32(stg + 0x4)));
+        sb.append(" stgc4=");
+        sb.append(StrUtils.toHex((long) System.read32(stg + 0xc4)));
+        sb.append(" stg148=");
+        sb.append(StrUtils.toHex((long) System.read32(stg + 0x148)));
+        sb.append(" stg1f4=");
+        sb.append(StrUtils.toHex((long) System.read32(stg + 0x1f4)));
+        sb.append(" sys18=");
+        sb.append(StrUtils.toHex((long) System.read32(sys + 0x18)));
+        str m = sb.build();
+        StartupLogger.info(m);
+        Memory.free(m);
+        sb.dispose();
+    }
+
+    /** STG CRG 的 USB 时钟门打开（125M 分频由 U-Boot 配置，这里不动）。 */
+    private static void enableClocks() {
+        enableClock(CLK_USB_APB);
+        enableClock(CLK_UTMI_APB);
+        enableClock(CLK_USB_AXI);
+        enableClock(CLK_LPM);
+        enableClock(CLK_STB);
+        enableClock(CLK_APP_125);
+        StrBuilder sb = new StrBuilder();
+        sb.append("jh7110-usb: gates 04..18=");
+        for (int off = 4; off <= 0x18; off += 4) {
+            sb.append(StrUtils.toHex((long) System.read32(MemoryLayout.physToVirt(STG_CRG + (long) off))));
+            sb.append(" ");
+        }
+        str m = sb.build();
+        StartupLogger.info(m);
+        Memory.free(m);
+        sb.dispose();
+    }
+
+    private static void enableClock(int id) {
+        long reg = MemoryLayout.physToVirt(STG_CRG + (long) (id - CLK_REG_BASE) * 4);
+        System.write32(reg, System.read32(reg) | CLK_GATE);
+    }
+
+    /** 释放 USB 复位（STGCRG assert 位清 + 等 status 清）。 */
+    private static void deassertResets() {
+        deassertReset(RST_USB_PWRUP);
+        deassertReset(RST_USB_APB);
+        deassertReset(RST_USB_AXI);
+        deassertReset(RST_USB_UTMI_APB);
+        long base = MemoryLayout.physToVirt(STG_CRG);
+        StrBuilder sb = new StrBuilder();
+        sb.append("jh7110-usb: rst assert=0x");
+        sb.append(StrUtils.toHex((long) System.read32(base + STG_RESET_ASSERT)));
+        sb.append(" status=0x");
+        sb.append(StrUtils.toHex((long) System.read32(base + STG_RESET_STATUS)));
+        str m = sb.build();
+        StartupLogger.info(m);
+        Memory.free(m);
+        sb.dispose();
+    }
+
+    private static void deassertReset(int id) {
+        int bit = 1 << (id % 32);
+        long base = MemoryLayout.physToVirt(STG_CRG);
+        long assertReg = base + STG_RESET_ASSERT;
+        long statusReg = base + STG_RESET_STATUS;
+        System.write32(assertReg, System.read32(assertReg) & ~bit);
+        // 语义：deassert 完成 = status 位被置 1（见 U-Boot reset-jh7110.c）
+        long deadline = Timer.getTicks() + Timer.TICK_HZ / 10;
+        while (Timer.getTicks() < deadline) {
+            if ((System.read32(statusReg) & bit) != 0) break;
+        }
+    }
+
+    /** USB2/3 PHY 控制寄存器（对齐 Linux phy-jh7110-usb.c / phy-jh7110-pcie.c）。 */
+    private static void setPhyRegs() {
+        long phy2 = MemoryLayout.physToVirt(PHY2_BASE);
+        long phy3 = MemoryLayout.physToVirt(PHY3_BASE);
+        // USB2 PHY 时钟模式：RX normal power（Linux jh7110_usb2_phy_init 必写，U-Boot 移植漏了）
+        System.write32(phy2, System.read32(phy2) | 0x2);
+        // USB2 PHY LS keep-alive：host 模式置 bit4（USB_LS_KEEPALIVE_ENABLE）
+        System.write32(phy2 + USB_LS_KEEPALIVE_OFF,
+                (System.read32(phy2 + USB_LS_KEEPALIVE_OFF) & ~0x14) | 0x10);
+        // USB3 PHY PLL SS_MODE（bit4），RMW 保留其他位
+        System.write32(phy3 + USB3_PHY_PLL_CTL_OFF,
+                System.read32(phy3 + USB3_PHY_PLL_CTL_OFF) | 0x10);
+        StrBuilder sb = new StrBuilder();
+        sb.append("jh7110-usb: phy2+4=");
+        sb.append(StrUtils.toHex((long) System.read32(phy2 + USB_LS_KEEPALIVE_OFF)));
+        sb.append(" phy3+7c=");
+        sb.append(StrUtils.toHex((long) System.read32(phy3 + USB3_PHY_PLL_CTL_OFF)));
+        sb.append(" phy2 0..c=");
+        for (int off = 0; off <= 0xc; off += 4) {
+            sb.append(StrUtils.toHex((long) System.read32(phy2 + (long) off)));
+            sb.append(" ");
+        }
+        sb.append("phy3 0..c=");
+        for (int off = 0; off <= 0xc; off += 4) {
+            sb.append(StrUtils.toHex((long) System.read32(phy3 + (long) off)));
+            sb.append(" ");
+        }
+        sb.append("phy3 28/80=");
+        sb.append(StrUtils.toHex((long) System.read32(phy3 + 0x28)));
+        sb.append(" ");
+        sb.append(StrUtils.toHex((long) System.read32(phy3 + 0x80)));
+        str m = sb.build();
+        StartupLogger.info(m);
+        Memory.free(m);
+        sb.dispose();
+    }
+
+    /** Mars 板级 VBUS 使能：SYS GPIO25 mux 成 USB_DRIVE_VBUS 信号（对应 dts usb0_pins）。
+     * U-Boot 在 device probe 时自动应用 pinctrl，内核无 pinctrl 框架，这里手动做。 */
+    private static void enableVbus() {
+        long gpio = MemoryLayout.physToVirt(SYS_GPIO);
+        int off = 4 * (VBUS_PIN / 4);
+        int shift = 8 * (VBUS_PIN % 4);
+        long dout = gpio + 0x040 + off;   // DOUT：外设信号号
+        long doen = gpio + 0x000 + off;   // DOEN：输出使能（0=使能）
+        System.write32(dout, (System.read32(dout) & ~(0x7F << shift)) | (VBUS_DOUT_SIGNAL << shift));
+        System.write32(doen, System.read32(doen) & ~(0x3F << shift));
+        // mux 功能号 0（0x2a0 寄存器 bit15 起，pin25）
+        System.write32(gpio + 0x2a0, System.read32(gpio + 0x2a0) & ~(0x3 << 15));
+        // pad cfg：清 bias/smt/slew/ie（dts usb0_pins 的 pinconf），保留 drive-strength
+        System.write32(gpio + 0x120 + (long) VBUS_PIN * 4,
+                System.read32(gpio + 0x120 + (long) VBUS_PIN * 4) & ~0x6D);
+        StrBuilder sb = new StrBuilder();
+        sb.append("jh7110-usb: vbus dout=");
+        sb.append(StrUtils.toHex((long) System.read32(dout)));
+        sb.append(" doen=");
+        sb.append(StrUtils.toHex((long) System.read32(doen)));
+        sb.append(" gpi25=");
+        sb.append(StrUtils.toHex((long) ((System.read32(gpio + 0x080 + off) >>> shift) & 0x7F)));
+        sb.append(" mux=");
+        sb.append(StrUtils.toHex((long) System.read32(gpio + 0x2a0)));
+        sb.append(" pad=");
+        sb.append(StrUtils.toHex((long) System.read32(gpio + 0x120 + (long) VBUS_PIN * 4)));
+        str m = sb.build();
+        StartupLogger.info(m);
+        Memory.free(m);
+        sb.dispose();
+    }
+
+    private static void setBits(long addr, int mask) {
+        System.write32(addr, System.read32(addr) | mask);
+    }
+
+    private static void clearBits(long addr, int mask) {
+        System.write32(addr, System.read32(addr) & ~mask);
+    }
+
+    private static void setField(long addr, int value, int mask) {
+        System.write32(addr, (System.read32(addr) & ~mask) | value);
+    }
+}

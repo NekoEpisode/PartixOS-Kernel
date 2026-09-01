@@ -1,0 +1,28 @@
+package kr.partix.kernel.io.usb;
+
+/** USB 端点（来自配置描述符）。 */
+class USBEndpoint {
+    static final int TYPE_CONTROL   = 0;
+    static final int TYPE_ISOC      = 1;
+    static final int TYPE_BULK      = 2;
+    static final int TYPE_INTERRUPT = 3;
+
+    private final int address;    // bit7=方向(1 IN) bits3:0=端点号
+    private final int type;       // bits1:0
+    private final int maxPacket;
+    private final int interval;
+
+    USBEndpoint(int address, int type, int maxPacket, int interval) {
+        this.address = address;
+        this.type = type;
+        this.maxPacket = maxPacket;
+        this.interval = interval;
+    }
+
+    int getAddress() -> address
+    int getType() -> type & 3
+    int getMaxPacket() -> maxPacket
+    int getInterval() -> interval
+
+    boolean isIn() -> (address & 0x80) != 0
+}

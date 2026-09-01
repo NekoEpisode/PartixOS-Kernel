@@ -1,0 +1,40 @@
+package kr.partix.kernel.io.usb;
+
+/**
+ * USB 主机控制器抽象：USB 核心（枚举 / 类驱动）只面向它，不面向具体控制器。
+ * 实现：xHCI（当前）；EHCI/OHCI/UHCI（未来）。
+ * 端口操作按 USB 语义（连接 / 变化 / 复位），控制器差异藏在实现里；
+ * addressDevice 用拓扑信息（根端口/路由/TT/速度）给出可用 USB 地址；
+ * 传输全部同步轮询完成。
+ */
+interface IHc {
+    /** 控制器类型（PCI progIF：0x00=UHCI 0x10=OHCI 0x20=EHCI 0x30=xHCI）。 */
+    int getHcType();
+
+    /** 根端口数（读自控制器寄存器，不硬编码）。 */
+    int getPortCount();
+
+    boolean isPortConnected(int port);
+    boolean isPortChanged(int port);
+    void clearPortChanged(int port);
+
+    /** 复位根端口并等待链路就绪；返回是否成功。 */
+    boolean resetPort(int port);
+
+    /** 根端口上设备的速度（1=FS 2=LS 3=HS 4=SS）。 */
+    int getPortSpeed(int port);
+
+    /**
+     * 让挂在路由链末端的设备获得地址（Enable Slot + Address Device 等）。
+     * port=链的根端口索引；route=路由字符串；ttSlot/ttPort 为 LS/FS 经
+     * HS hub 时的 TT 信息（无则 0）。返回 USB 地址（1..127），失败返回 0。
+     */
+    int addressDevice(int port, long route, int speed, int ttSlot, int ttPort);
+
+    /**
+     * 同步控制传输（枚举 / 类请求）。
+     * data 为缓冲区 VA（IN 写回 / OUT 读出），wLength=0 时 data 可为 0。
+     */
+    boolean controlTransfer(int addr, int bmRequestType, int bRequest,
+                            int wValue, int wIndex, int wLength, long data);
+}

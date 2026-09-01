@@ -1,0 +1,89 @@
+package kr.partix.kernel.io.usb.xhci;
+
+import kr.partix.kernel.memory.MemoryLayout;
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.core.memory.Memory;
+
+/**
+ * xHCI TRB 环（生产者侧：命令环 / 传输环共用）。
+ * 单段 + 末端自链 Link TRB（TC=1），软件在回绕时重写 Link 的 Cycle 位。
+ * 同步使用：完成前不重复入队，环不会写满。
+ */
+class XhciRing {
+    // TRB 控制位（与 u-boot include/usb/xhci.h 一致）
+    static final int TRB_CYCLE      = 1 << 0;
+    static final int TRB_CHAIN      = 1 << 4;
+    static final int TRB_IOC        = 1 << 5;
+    static final int TRB_IDT        = 1 << 6;
+    static final int TRB_DIR_IN     = 1 << 16;
+    static final int TRB_TYPE_SHIFT = 10;
+
+    static final int TRB_SETUP  = 2;
+    static final int TRB_DATA   = 3;
+    static final int TRB_STATUS = 4;
+    static final int TRB_LINK   = 6;
+
+    private final int size;        // TRB 总数（含末端自链 Link TRB）
+    private long va;
+    private long phys;
+    private int enqIndex;
+    private int cycle;
+    private int pending;
+    private boolean ok;
+
+    XhciRing(int trbCount) {
+        size = trbCount;
+        long raw = Memory.malloc(trbCount * 16 + 64);
+        va = (raw + 63) & ~63L;
+        phys = MemoryLayout.virtToPhys(va);
+        reset();
+    }
+
+    boolean isOk() -> ok
+    long getPhys() -> phys
+
+    void reset() {
+        for (int i = 0; i < size * 4; i++) System.write32(va + (long) i * 4, 0);
+        enqIndex = 0;
+        cycle = 1;
+        pending = 0;
+        ok = true;
+        writeLink();
+    }
+
+    /** 下一个可写 TRB 的 VA；环满返回 0。写入后调用 commit()。 */
+    long next() {
+        if (!ok || pending >= size - 1) return 0;
+        if (enqIndex == size - 1) {
+            writeLink();
+            enqIndex = 0;
+            cycle ^= 1;
+        }
+        return va + (long) enqIndex * 16;
+    }
+
+    void commit() {
+        enqIndex += 1;
+        pending += 1;
+    }
+
+    /** 一条 TRB 被消费（传输/命令完成）后归还槽位。 */
+    void complete() {
+        if (pending > 0) pending -= 1;
+    }
+
+    /** 写一个 TRB；Cycle 位自动填当前 cycle。 */
+    void writeTrb(long trbVa, long param, int status, int control) {
+        System.write32(trbVa, (int) param);
+        System.write32(trbVa + 4, (int) (param >>> 32));
+        System.write32(trbVa + 8, status);
+        System.write32(trbVa + 12, control | cycle);
+    }
+
+    static int trbType(int type) -> type << TRB_TYPE_SHIFT
+
+    private void writeLink() {
+        long linkVa = va + (long) (size - 1) * 16;
+        writeTrb(linkVa, phys, 0, trbType(TRB_LINK) | (1 << 1) | cycle);
+    }
+}

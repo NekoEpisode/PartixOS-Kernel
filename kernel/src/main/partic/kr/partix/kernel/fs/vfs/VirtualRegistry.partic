@@ -4,7 +4,7 @@ import lang.partic.stdlib.additional.utils.StrUtils;
 import kr.partix.kernel.fs.vfs.fileops.IFileOps;
 
 class VirtualRegistry {
-    private static final int MAX_ENTRIES = 32;
+    private static final int MAX_ENTRIES = 64;
     private static str[] paths;
     private static IFileOps[] ops;
     private static int[] modes;
@@ -24,6 +24,27 @@ class VirtualRegistry {
             modes[count] = mode;
             count += 1;
         }
+    }
+
+    /** 移除虚拟设备节点（热拔插）。只摘槽位，不释放 path/ops——所有权归注册者。 */
+    static boolean unregister(str path) {
+        for (int i = 0; i < count; i += 1) {
+            if (StrUtils.equals(paths[i], path)) {
+                int j = i;
+                while (j < count - 1) {
+                    paths[j] = paths[j + 1];
+                    ops[j] = ops[j + 1];
+                    modes[j] = modes[j + 1];
+                    j += 1;
+                }
+                paths[count - 1] = null;
+                ops[count - 1] = null;
+                modes[count - 1] = 0;
+                count -= 1;
+                return true;
+            }
+        }
+        return false;
     }
 
     static IFileOps find(str path) {

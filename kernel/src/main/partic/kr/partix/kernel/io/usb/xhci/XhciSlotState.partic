@@ -1,0 +1,10 @@
+package kr.partix.kernel.io.usb.xhci;
+
+/** 单个设备槽的运行时状态（槽 ID = USB 设备地址）。 */
+class XhciSlotState {
+    int slotId;
+    XhciRing ep0Ring;
+    long outCtx;        // 输出设备上下文 VA
+    long outCtxPhys;
+    boolean addressed;
+}

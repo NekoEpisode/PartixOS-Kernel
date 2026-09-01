@@ -5,6 +5,12 @@ interface IPageTableManager {
     void map(long virt, long phys, long size, int flags);
     void load();
 
+    /**
+     * 把 [phys, phys+size) 映射进内核 physmap（VA = physmap基址 + phys，2MB 页）。
+     * 用于 physmap 初始覆盖范围之外的高位 MMIO（如 4GB 以上的 64 位 PCI BAR）。
+     */
+    void mapPhys(long phys, long size, int flags);
+
     /** 内核根页表（当前活动的内核地址空间）。 */
     long getKernelRoot();
 

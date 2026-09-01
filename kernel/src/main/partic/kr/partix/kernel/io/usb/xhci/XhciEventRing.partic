@@ -1,0 +1,54 @@
+package kr.partix.kernel.io.usb.xhci;
+
+import kr.partix.kernel.memory.MemoryLayout;
+import kr.partix.kernel.sys.System;
+import lang.partic.stdlib.core.memory.Memory;
+
+/** xHCI 事件环（消费者侧）：无 Link TRB，纯软件回绕。 */
+class XhciEventRing {
+    private final int size;
+    private long va;
+    private long phys;
+    private int deqIndex;
+    private int cycle;
+    private boolean ok;
+
+    XhciEventRing(int trbCount) {
+        size = trbCount;
+        long raw = Memory.malloc(trbCount * 16 + 64);
+        va = (raw + 63) & ~63L;
+        phys = MemoryLayout.virtToPhys(va);
+        reset();
+    }
+
+    boolean isOk() -> ok
+    long getPhys() -> phys
+
+    /** 当前消费位置的物理地址（更新 ERDP 用）。 */
+    long getDequeuePhys() -> phys + (long) deqIndex * 16
+
+    void reset() {
+        for (int i = 0; i < size * 4; i++) System.write32(va + (long) i * 4, 0);
+        deqIndex = 0;
+        cycle = 1;
+        ok = true;
+    }
+
+    /** 取下一个事件；无事件返回 false。事件四个 dword 写入 out。 */
+    boolean poll(int[] out) {
+        if (!ok) return false;
+        long trbVa = va + (long) deqIndex * 16;
+        int control = System.read32(trbVa + 12);
+        if ((control & 1) != cycle) return false;
+        out[0] = System.read32(trbVa);
+        out[1] = System.read32(trbVa + 4);
+        out[2] = System.read32(trbVa + 8);
+        out[3] = control;
+        deqIndex += 1;
+        if (deqIndex == size) {
+            deqIndex = 0;
+            cycle ^= 1;
+        }
+        return true;
+    }
+}
