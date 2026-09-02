@@ -3,11 +3,15 @@ package kr.partix.kernel.arch.riscv;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.io.uart.IUART;
 import kr.partix.kernel.memory.MemoryLayout;
-import kr.partix.kernel.timer.Timer;
 
 class RISCVUART implements IUART {
     private final long addr;
     private final long shift;   // FDT reg-shift：寄存器偏移 = 标准偏移 << shift（DW-APB 为 2）
+
+    // 关中断打印守卫（hal/runtime.c）：单核抢占内核下整行打印需关 sstatus.SIE，
+    // 否则逐字符发送期间被 tick 抢占会导致 UART 行交错/丢字节。
+    private extern long kr_irq_save();
+    private extern void kr_irq_restore(long s);
 
     RISCVUART(long addr, long shift) {
         // FDT 给的是物理地址，经 physmap 映射后访问
@@ -19,29 +23,42 @@ class RISCVUART implements IUART {
         print((byte) c);
     }
 
+    /** 裸字节发送（无锁；供字节级用户控制台使用）。 */
     void print(byte b) {
-        // 等发送器就绪（LSR bit5 = THRE），1 秒超时兜底（超时丢弃该字节）。
+        // 等发送器就绪（LSR bit5 = THRE）。注意：打印可能在关中断状态下进行
+        // （tick 不走），不能用 tick 超时——改用轮询计数兜底（UART 故障时
+        // 丢弃该字节避免永久挂死）。
         // DW-APB（reg-shift=2）下 LSR 在 base+(5<<2)=base+0x14，不能按 16550
         // 的 base+0x05 访问——那会读到 IER，THRE 永不置位导致启动即挂死。
-        long deadline = Timer.getTicks() + Timer.TICK_HZ;
         long lsr = addr + (5L << shift);
+        int guard = 0;
         while ((System.read8(lsr) & 0x20) == 0) {
-            if (Timer.getTicks() > deadline) return;
+            guard += 1;
+            if (guard > 20000000) return;
         }
         System.write8(addr, b);   // THR 偏移 0，shift 不影响
     }
 
+    /** 整行打印（关中断，行内不与他行交错）。 */
     void print(str s) {
+        long irq = kr_irq_save();
         int i = 0;
         while (s[i] != (byte)0) {
             print(s[i]);
             i += 1;
         }
+        kr_irq_restore(irq);
     }
 
     void println(str s) {
-        print(s);
-        print("\n");
+        long irq = kr_irq_save();
+        int i = 0;
+        while (s[i] != (byte)0) {
+            print(s[i]);
+            i += 1;
+        }
+        print((byte) '\n');
+        kr_irq_restore(irq);
     }
 
     long getAddr() -> addr

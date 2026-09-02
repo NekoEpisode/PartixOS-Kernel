@@ -4,10 +4,6 @@ import kr.partix.kernel.device.IDevice;
 import kr.partix.kernel.io.drivers.DriverType;
 import kr.partix.kernel.io.drivers.IDriver;
 import kr.partix.kernel.io.usb.IHc;
-import kr.partix.kernel.log.StartupLogger;
-import kr.partix.kernel.main.BspKrMain;
-import kr.partix.kernel.memory.MemoryLayout;
-import kr.partix.kernel.paging.PageFlags;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.timer.Timer;
 import lang.partic.stdlib.additional.utils.StrBuilder;
@@ -26,6 +22,11 @@ import lang.partic.stdlib.core.memory.Memory;
  *   门铃     bar+DBOFF：DB[0]=命令门铃（写 0），DB[slot]=端点门铃（EP0 写 1）
  */
 class XhciDriver implements IDriver, IHc {
+    // 内存栅栏 + DMA 读侧缓存回写（真机非一致平台：xHC 经 DMA 读 DRAM，
+    // CPU 先写后敲 doorbell 必须保证写已到达 DRAM/L2——RISC-V 弱序需 fence）
+    private extern void kr_mem_fence();
+    private extern void cache_clean_range(long addr, long size);
+
     // PORTSC 位（xHCI 规范 5.4.8，与 u-boot xhci.h 一致）
     private static final int PSC_CCS  = 1 << 0;      // 当前连接状态
     private static final int PSC_PED  = 1 << 1;      // 端口使能
@@ -43,6 +44,12 @@ class XhciDriver implements IDriver, IHc {
     private static final int PSC_CHANGE_MASK = PSC_CSC | PSC_PEC | PSC_WRC
             | PSC_OCC | PSC_PRC | PSC_PLC | PSC_CEC;
 
+    // PORTSC 位属性（对齐 Linux xhci-hub.c）：RO 位 + RWS 位写回必须保留
+    // （RWS：写 0 清除写 1 置位——PP/PLS/PIC/wake；RO：只读状态位）。
+    // RW1S(PR)/RW1CS(PED/变化位) 写 0 无效果，无需保留。
+    private static final int PORTSC_RO  = (1 << 0) | (1 << 3) | (0xf << 10) | (1 << 30);
+    private static final int PORTSC_RWS = (0xf << 5) | (1 << 9) | (0x3 << 14) | (0x7 << 25);
+
     private static final int CAP_HCSPARAMS1 = 0x04;
     private static final int CAP_HCSPARAMS2 = 0x08;
     private static final int CAP_HCSPARAMS3 = 0x0C;
@@ -52,6 +59,7 @@ class XhciDriver implements IDriver, IHc {
 
     private static final int OP_USBCMD      = 0x00;
     private static final int OP_USBSTS      = 0x04;
+    private static final int OP_PAGESIZE    = 0x08;
     private static final int OP_CRCR        = 0x18;
     private static final int OP_DCBAAP      = 0x30;
     private static final int OP_CONFIG      = 0x38;
@@ -82,6 +90,9 @@ class XhciDriver implements IDriver, IHc {
 
     private static final int CR_ENABLE_SLOT   = 9;
     private static final int CR_ADDRESS_DEVICE = 11;
+    private static final int CR_STOP_ENDPOINT  = 15;
+    private static final int CR_SET_TR_DEQUEUE = 16;
+    private static final int EP0_CTX_INDEX     = 1;
 
     private static final int SPEED_FULL  = 1;
     private static final int SPEED_LOW   = 2;
@@ -93,11 +104,18 @@ class XhciDriver implements IDriver, IHc {
 
     private final int hcType;   // 控制器类型（PCI progIF 或 0x30=xHCI）
 
+    /**
+     * DMA 读侧缓存回写是否需要（真机 JH7110 cdns3：CPU 写环后 xHC 经 DMA 读
+     * DRAM，需回写 L2；QEMU 等无此问题且无 L2 控制器寄存器，必须跳过）。
+     */
+    private final boolean dmaNeedClean;
+
     private long bar;
     private long opBase;
     private long rtBase;
     private long dbBase;
     private int capLength;
+    private int hciVersion;      // HCIVERSION（bar+2）：TRT 字段仅在 >=0x100 有效（对齐 Linux）
     private int hcsparams1;
     private int hcsparams2;
     private int hcsparams3;
@@ -120,8 +138,13 @@ class XhciDriver implements IDriver, IHc {
     private int lastCmdSlotId;
     private int lastTransferCcode;
 
-    XhciDriver(long barPhys, int hcType) {
+    // 缓存陈旧实验：64KB 假缓冲 + 累加器（横扫强制逐出 L1 行）
+    private long sweepBuf;
+    private int sweepAcc;
+
+    XhciDriver(long barPhys, int hcType, boolean dmaNeedClean) {
         this.hcType = hcType;
+        this.dmaNeedClean = dmaNeedClean;
         evBuf = new int[4];
         initRegisters(barPhys);
         if (!ok) return;
@@ -152,34 +175,78 @@ class XhciDriver implements IDriver, IHc {
 
     boolean isPortConnected(int port) -> (readPortsc(port) & PSC_CCS) != 0
 
+    public void powerPort(int port) {
+        // 只在 PP=0 时写（PP 是 RWS 位；cdns3 对频繁写敏感）
+        if ((readPortsc(port) & PSC_PP) == 0) {
+            portscWrite(port, PSC_PP);
+        }
+    }
+
     boolean isPortChanged(int port) -> (readPortsc(port) & PSC_CHANGE_MASK) != 0
 
     void clearPortChanged(int port) {
-        // RW1C：写回 1 清除
-        System.write32(portscAddr(port), readPortsc(port) | PSC_CHANGE_MASK);
+        // 统一 PORTSC 写入：保留 RO+RWS 位（PP/PLS 等），只置变化位（RW1C 写 1 清）
+        portscWrite(port, PSC_CHANGE_MASK);
+    }
+
+    /** PORTSC 安全写入：neutral（保留 RO/RWS 位）+ 目标位。
+     * PP/PLS 是 RWS（写 0 会清除），PED/RW1C/RW1S 写 0 无效果——所以不能
+     * 只写目标位（会断电/清 PLS），也不能写回整个值（会禁用 PED）。 */
+    private void portscWrite(int port, int setBits) {
+        int sc = readPortsc(port);
+        int neutral = (sc & PORTSC_RO) | (sc & PORTSC_RWS);
+        System.write32(portscAddr(port), neutral | setBits);
     }
 
     boolean resetPort(int port) {
         if (!ok) return false;
-        long psc = portscAddr(port);
-        // 端口上电（真机端口可能默认不上电，PP 读写确认）
+        // 端口上电（RWS 位，写 1 置位）
         if ((readPortsc(port) & PSC_PP) == 0) {
-            System.write32(psc, readPortsc(port) | PSC_PP);
+            portscWrite(port, PSC_PP);
             long deadline = Timer.getTicks() + Timer.TICK_HZ / 2;
             while (Timer.getTicks() < deadline) {
                 if ((readPortsc(port) & PSC_PP) != 0) break;
             }
         }
-        // 发复位：写 PR=1；复位完成时 PRC 置位（PR 自清）
-        System.write32(psc, readPortsc(port) | PSC_PR);
-        long deadline = Timer.getTicks() + Timer.TICK_HZ / 2;
-        while (Timer.getTicks() < deadline) {
-            if ((readPortsc(port) & PSC_PRC) != 0) {
-                System.write32(psc, readPortsc(port) | PSC_PRC);   // 清 PRC
-                return (readPortsc(port) & PSC_PED) != 0;          // 链路就绪
+        // 清变化位 + 发复位（PR 是 RW1S 写 1 触发；neutral 保留 PP/PLS）
+        portscWrite(port, PSC_CHANGE_MASK);
+        portscWrite(port, PSC_PR);
+        // 轮询复位完成：PRC 置位（标准）或 PED 置位
+        long t0 = Timer.getTicks();
+        int lastSc = -1;
+        int changes = 0;
+        while (true) {
+            int sc = readPortsc(port);
+            if (sc != lastSc) {
+                lastSc = sc;
+                changes += 1;
+                if (changes <= 12) {
+                    StrBuilder dbg = new StrBuilder();
+                    dbg.append("xhci: rp");
+                    str ps = StrUtils.toDec(port);
+                    dbg.append(ps);
+                    Memory.free(ps);
+                    dbg.append("=");
+                    dbg.append(StrUtils.toHex((long) sc));
+                    str dm = dbg.build();
+                    uart(dm);
+                    Memory.free(dm);
+                    dbg.dispose();
+                }
+            }
+            if ((sc & PSC_PRC) != 0) {
+                // 清 PRC（RW1C 写 1），neutral 保留 PP/PLS
+                portscWrite(port, PSC_PRC);
+                return (readPortsc(port) & PSC_PED) != 0;
+            }
+            if ((sc & PSC_PED) != 0) {
+                return true;
+            }
+            if (Timer.getTicks() - t0 > Timer.TICK_HZ * 2) {
+                uart("xhci: reset timeout");
+                return false;
             }
         }
-        return false;
     }
 
     /** 根端口上设备的速度（PORTSC bits 10:13）。 */
@@ -218,11 +285,24 @@ class XhciDriver implements IDriver, IHc {
 
         int nTrbs = 0;
 
-        // Setup TRB：IDT（立即数据）、CHAIN、TRT（有数据阶段时：2=OUT 3=IN）
+        // 真机 cdns3 怪癖：新寻址的 EP0 环上第一个 TD 能执行，环推进后的
+        // TD（哪怕同内容写在新位置）永不执行。对策：每次传输前若环不在
+        // 头部，用 Stop Endpoint + Set TR Dequeue 把 xHC 的 dequeue 倒回
+        // 环头，本 TD 总是写在 idx0。
+        if (ring.getEnqIndex() != 0) {
+            if (!rewindEp0(addr)) {
+                uart("xhci: ep0 rewind failed");
+                return false;
+            }
+        }
+
+        uart("xhci: ctrl setup ring");
+        // Setup TRB：IDT（立即数据）、CHAIN、TRT（有数据阶段时：2=OUT 3=IN；
+        // TRT 字段仅在 HCIVERSION >= 0x100 有效——对齐 Linux）
         long trb = ring.next();
         if (trb == 0) return false;
         int trt = 0;
-        if (wLength > 0) {
+        if (wLength > 0 && hciVersion >= 0x100) {
             if (in) trt = 3 << 16;
             else trt = 2 << 16;
         }
@@ -232,14 +312,19 @@ class XhciDriver implements IDriver, IHc {
         ring.commit();
         nTrbs += 1;
 
-        // Data TRB（可选）
+        // Data TRB（可选）——对齐 Linux xhci_queue_ctrl_tx：IN 数据阶段带
+        // ISP（Interrupt on Short Packet），cdns3 可能依赖它处理短包后的状态阶段
         if (wLength > 0 && dataPhys != 0) {
             trb = ring.next();
             if (trb == 0) return false;
             int dir = 0;
-            if (in) dir = XhciRing.TRB_DIR_IN;
+            int isp = 0;
+            if (in) {
+                dir = XhciRing.TRB_DIR_IN;
+                isp = XhciRing.TRB_ISP;
+            }
             ring.writeTrb(trb, dataPhys, wLength & 0x1ffff,
-                    XhciRing.trbType(XhciRing.TRB_DATA) | XhciRing.TRB_CHAIN | dir);
+                    XhciRing.trbType(XhciRing.TRB_DATA) | XhciRing.TRB_CHAIN | dir | isp);
             ring.commit();
             nTrbs += 1;
         }
@@ -254,14 +339,216 @@ class XhciDriver implements IDriver, IHc {
         ring.commit();
         nTrbs += 1;
 
+        uart("xhci: ctrl doorbell");
+        // 调试：doorbell 前 dump ep0Ring 前 3 TRB（12 dword）+ DB 寄存器地址
+        StrBuilder rdbg = new StrBuilder();
+        rdbg.append("xhci: ringPhys=0x");
+        rdbg.append(StrUtils.toHex(ring.getPhys()));
+        rdbg.append(" db=0x");
+        rdbg.append(StrUtils.toHex(dbBase + (long) addr * 4));
+        for (int w = 0; w < 12; w++) {
+            rdbg.append(" ");
+            rdbg.append(StrUtils.toHex((long) System.read32(ring.getVa() + (long) w * 4)));
+        }
+        str rm = rdbg.build();
+        uart(rm);
+        Memory.free(rm);
+        rdbg.dispose();
+        // DMA 可见性：回写 ep0 传输环（xHC 将 DMA 读这些 TRB），再敲 EP0 门铃
+        dmaClean(ring.getVa(), RING_SIZE * 16);
         ringEpDoorbell(addr);
+        uart("xhci: ctrl wait event");
         boolean done = waitTransferEvent(addr);
+        if (!done) {
+            dumpTransferDiag(addr);
+        }
+        // 缓存陈旧实验：传输成功后立即读缓冲 vs 横扫 L1 后再读——
+        // 若两次内容不同（如 vid 0x0100→0x30fa），说明 DMA 写入被陈旧缓存遮蔽。
+        if (done && wLength > 0 && in && data != 0) {
+            dumpBytes("xhci: databuf pre-sweep", data, 12);
+            cacheSweep();
+            dumpBytes("xhci: databuf post-sweep", data, 12);
+        }
         for (int i = 0; i < nTrbs; i++) ring.complete();
         if (!done) return false;
         return lastTransferCcode == CC_SUCCESS || lastTransferCcode == CC_SHORT_TX;
     }
 
+    /**
+     * 传输超时后的一次完整快照（UART 已加锁，行不会被交错）：
+     * 1) deq 索引 + ERDP 寄存器；2) 事件环 deq 前后若干 TRB（逐条解码）；
+     * 3) PORTSC port0 全解码；4) 输出设备上下文 slot+ep0（EP State / TR 环指针
+     *    是否前进）；5) ep0 传输环前 3 个 TRB（对比 doorbell 前，是否被消费）。
+     */
+    private void dumpTransferDiag(int slot) {
+        StrBuilder l = new StrBuilder();
+        l.append("xhci: diag slot=");
+        appendDec(l, slot);
+        l.append(" deq=");
+        appendDec(l, evRing.getDeqIndex());
+        l.append(" erdp=");
+        appendHex(l, System.read32(rtBase + RT_ERDP));
+        l.append(":");
+        appendHex(l, System.read32(rtBase + RT_ERDP + 4));
+        l.append(" sts=");
+        appendHex(l, System.read32(opBase + OP_USBSTS));
+        l.append(" cfg=");
+        appendHex(l, System.read32(opBase + OP_CONFIG));
+        l.append(" dbap=");
+        appendHex(l, System.read32(opBase + OP_DCBAAP));
+        l.append(" crcr=");
+        appendHex(l, System.read32(opBase + OP_CRCR));
+        l.append(" mfi=");
+        appendHex(l, System.read32(rtBase));
+        l.append(" dbap[");
+        appendDec(l, slot);
+        l.append("]=");
+        appendHex(l, System.read32(dcbaa + (long) slot * 8));
+        l.append(":");
+        appendHex(l, System.read32(dcbaa + (long) slot * 8 + 4));
+        l.append(" dbap0=");
+        appendHex(l, System.read32(dcbaa));
+        l.append(" erstsz=");
+        appendHex(l, System.read32(rtBase + RT_ERSTSZ));
+        l.append(" erstba=");
+        appendHex(l, System.read32(rtBase + RT_ERSTBA));
+        l.append(" x8000=");
+        appendHex(l, System.read32(bar + 0x8000));
+        l.append(" x8120=");
+        appendHex(l, System.read32(bar + 0x8120));
+        uartFree(l);
+
+        int start = evRing.getDeqIndex() - 2;
+        if (start < 0) start = 0;
+        for (int e = 0; e < 8; e++) {
+            int i = start + e;
+            if (i >= EVENT_RING_SIZE) break;
+            long t = evRing.getVa() + (long) i * 16;
+            int w0 = System.read32(t);
+            int w1 = System.read32(t + 4);
+            int w2 = System.read32(t + 8);
+            int w3 = System.read32(t + 12);
+            StrBuilder q = new StrBuilder();
+            q.append("xhci: evring[");
+            appendDec(q, i);
+            q.append("]=");
+            appendHex(q, w0);
+            q.append(" ");
+            appendHex(q, w1);
+            q.append(" ");
+            appendHex(q, w2);
+            q.append(" ");
+            appendHex(q, w3);
+            q.append(" type=");
+            appendDec(q, (w3 >>> 10) & 0x3f);
+            q.append(" cc=");
+            appendDec(q, (w2 >>> 24) & 0xff);
+            q.append(" slotid=");
+            appendDec(q, (w3 >>> 24) & 0xff);
+            uartFree(q);
+        }
+
+        int sc = readPortsc(0);
+        StrBuilder p = new StrBuilder();
+        p.append("xhci: port0sc=");
+        appendHex(p, sc);
+        p.append(" ccs=");
+        appendDec(p, (sc >>> 0) & 1);
+        p.append(" ped=");
+        appendDec(p, (sc >>> 1) & 1);
+        p.append(" oca=");
+        appendDec(p, (sc >>> 3) & 1);
+        p.append(" pr=");
+        appendDec(p, (sc >>> 4) & 1);
+        p.append(" pp=");
+        appendDec(p, (sc >>> 9) & 1);
+        p.append(" pls=");
+        appendDec(p, (sc >>> 5) & 0xf);
+        p.append(" spd=");
+        appendDec(p, (sc >>> 10) & 0xf);
+        p.append(" chg=");
+        appendDec(p, (sc >>> 17) & 0x7f);
+        uartFree(p);
+
+        XhciSlotState st = slots[slot];
+        if (st != null) {
+            StrBuilder c = new StrBuilder();
+            c.append("xhci: outCtx slot:");
+            for (int w = 0; w < 4; w++) {
+                c.append(" ");
+                appendHex(c, System.read32(st.outCtx + (long) w * 4));
+            }
+            c.append(" | slotState=");
+            appendDec(c, (System.read32(st.outCtx + 12) >>> 27) & 0x1f);
+            c.append(" ep0:");
+            for (int w = 0; w < 4; w++) {
+                c.append(" ");
+                appendHex(c, System.read32(st.outCtx + 32 + (long) w * 4));
+            }
+            c.append(" | epState=");
+            appendDec(c, System.read32(st.outCtx + 32) & 0x7);
+            uartFree(c);
+
+            StrBuilder r = new StrBuilder();
+            r.append("xhci: ep0ring TRBs:");
+            long rv = st.ep0Ring.getVa();
+            for (int w = 0; w < 16; w++) {
+                r.append(" ");
+                appendHex(r, System.read32(rv + (long) w * 4));
+            }
+            uartFree(r);
+        }
+    }
+
     // ── 命令与事件 ──
+
+    /**
+     * 真机 cdns3 环复用对策：Stop Endpoint(EP0) + Set TR Dequeue 把 xHC 的
+     * dequeue 指回环头（DCS=1），随后调用方把 TD 写在 idx0。两条命令都等
+     * Command Completion。失败返回 false（调用方放弃本次传输）。
+     */
+    private boolean rewindEp0(int slot) {
+        XhciSlotState st = slots[slot];
+        if (st == null) return false;
+        long trb = cmdRing.next();
+        if (trb == 0) return false;
+        cmdRing.writeTrb(trb, 0, 0,
+                XhciRing.trbType(CR_STOP_ENDPOINT) | XhciRing.TRB_IOC
+                        | (slot << 24) | (EP0_CTX_INDEX << 16));
+        cmdRing.commit();
+        ringCommandDoorbell();
+        if (!waitCommandComplete()) {
+            uart("xhci: stop ep0 timeout");
+            cmdRing.complete();
+            return false;
+        }
+        cmdRing.complete();
+        if (lastCmdCcode != CC_SUCCESS) {
+            uart("xhci: stop ep0 ccode != success, skipping rewind");
+            return false;
+        }
+        long deq = st.ep0Ring.getPhys() | 1;
+        trb = cmdRing.next();
+        if (trb == 0) return false;
+        cmdRing.writeTrb(trb, deq, 0,
+                XhciRing.trbType(CR_SET_TR_DEQUEUE) | XhciRing.TRB_IOC
+                        | (slot << 24) | (EP0_CTX_INDEX << 16));
+        cmdRing.commit();
+        ringCommandDoorbell();
+        if (!waitCommandComplete()) {
+            uart("xhci: set dequeue timeout");
+            cmdRing.complete();
+            return false;
+        }
+        cmdRing.complete();
+        if (lastCmdCcode != CC_SUCCESS) {
+            uart("xhci: set dequeue ccode != success");
+            return false;
+        }
+        st.ep0Ring.rewind();
+        uart("xhci: ep0 rewound");
+        return true;
+    }
 
     private int enableSlot() {
         long trb = cmdRing.next();
@@ -351,6 +638,17 @@ class XhciDriver implements IDriver, IHc {
             return false;
         }
         st.addressed = true;
+        // 调试：dump output context（xHC 回写），确认 ep0 TR 指针已拷入
+        StrBuilder ocd = new StrBuilder();
+        ocd.append("xhci: outCtx slot0..ep0=");
+        for (int w = 0; w < 2 * (ctxSize / 4) + 2; w++) {
+            ocd.append(StrUtils.toHex((long) System.read32(st.outCtx + (long) w * 4)));
+            ocd.append(" ");
+        }
+        str ocm = ocd.build();
+        uart(ocm);
+        Memory.free(ocm);
+        ocd.dispose();
         return true;
     }
 
@@ -376,31 +674,134 @@ class XhciDriver implements IDriver, IHc {
 
     /** 等指定槽的传输完成事件。返回后 lastTransferCcode 有效。 */
     private boolean waitTransferEvent(int slot) {
-        long deadline = Timer.getTicks() + Timer.TICK_HZ;
+        probeDoorbell(slot);
+        // 诊断：真机 cdns3 的失败事件（cc=4 等）在门铃后 ~10s 才投递
+        // （xHC 重试极慢），1s 超时永远等不到。诊断期放宽到 12s。
+        long deadline = Timer.getTicks() + Timer.TICK_HZ * 12;
+        boolean timedOut = waitTransferEventPoll(slot, deadline);
+        if (timedOut) {
+            // 诊断：doorbell 可能丢失/过早（真机 cdns3 观察到敲了 EP0 门铃
+            // 后 xHC 毫无反应——不消费 TRB、无任何事件）。重敲一次再等 500ms，
+            // 区分"门铃没送达"与"TD 本身没执行"。
+            uart("xhci: tx timeout, replay doorbell");
+            ringEpDoorbell(slot);
+            deadline = Timer.getTicks() + Timer.TICK_HZ / 2;
+            if (!waitTransferEventPoll(slot, deadline)) timedOut = false;
+        }
+        if (timedOut) {
+            // 第二变体：xHC 若误判事件环满会停止处理传输环（规范 4.9.4）；
+            // 重写 ERDP 刷新 deq 位置 + 再敲门铃。
+            uart("xhci: replay2 erdp-refresh doorbell");
+            ackEventRing();
+            ringEpDoorbell(slot);
+            deadline = Timer.getTicks() + Timer.TICK_HZ / 3;
+            if (!waitTransferEventPoll(slot, deadline)) timedOut = false;
+        }
+        if (timedOut) {
+            // 第三变体：怀疑槽号/门铃索引错位——把 DB[1..maxSlots] 全敲一遍，
+            // 若 xHC 实际监听的是别的槽，会收到那个槽的 Transfer Event。
+            uart("xhci: replay3 all-slot doorbells");
+            for (int s = 1; s <= maxSlots; s++) {
+                System.write32(dbBase + (long) s * 4, 1);
+            }
+            deadline = Timer.getTicks() + Timer.TICK_HZ / 2;
+            if (!waitTransferEventPoll(slot, deadline)) timedOut = false;
+        }
+        if (timedOut) {
+            // 第四变体：某些 xHC 的门铃处理依赖中断器使能。只置 IMAN.IE
+            // （不开 USBCMD.INTE，不会产生真实中断），再敲门铃。
+            uart("xhci: replay4 iman-ie doorbell");
+            System.write32(rtBase + 0x20, System.read32(rtBase + 0x20) | 0x2);
+            ringEpDoorbell(slot);
+            deadline = Timer.getTicks() + Timer.TICK_HZ / 3;
+            if (!waitTransferEventPoll(slot, deadline)) timedOut = false;
+        }
+        if (timedOut) uart("xhci: ctrl wait event timeout");
+        return !timedOut;
+    }
+
+    private boolean waitTransferEventPoll(int slot, long deadline) {
+        boolean timedOut = true;
+        long nextSweep = Timer.getTicks() + Timer.TICK_HZ;
         while (Timer.getTicks() < deadline) {
             boolean any = false;
             while (evRing.poll(evBuf)) {
                 any = true;
                 int type = (evBuf[3] >>> 10) & 0x3f;
+                // 调试：打印收到的事件类型 + TRB 指针（判读事件指向数据 TRB
+                // 还是状态 TRB——控制传输是否完整走完）
+                StrBuilder dbg = new StrBuilder();
+                dbg.append("xhci: ev type=");
+                str ts = StrUtils.toDec(type);
+                dbg.append(ts);
+                Memory.free(ts);
+                dbg.append(" ptr=0x");
+                appendHex(dbg, evBuf[0]);
+                dbg.append(":");
+                appendHex(dbg, evBuf[1]);
+                dbg.append(" dw2=0x");
+                appendHex(dbg, evBuf[2]);
+                dbg.append(" dw3=0x");
+                appendHex(dbg, evBuf[3]);
+                str dm = dbg.build();
+                uart(dm);
+                Memory.free(dm);
+                dbg.dispose();
                 if (type == EV_TRANSFER) {
                     int evSlot = (evBuf[3] >>> 24) & 0xff;
                     if (evSlot == slot) {
                         lastTransferCcode = (evBuf[2] >>> 24) & 0xff;
                         ackEventRing();
-                        return true;
+                        timedOut = false;
+                        break;
                     }
                 }
             }
+            if (any && !timedOut) break;
             if (any) ackEventRing();
+            // 缓存陈旧实验：静默 1s 后横扫 L1，若事件环行此前被陈旧缓存
+            // 遮蔽，横扫后轮询应能看到 xHC 早已写入的事件。
+            if (Timer.getTicks() >= nextSweep) {
+                uart("xhci: cache sweep");
+                cacheSweep();
+                nextSweep = Timer.getTicks() + Timer.TICK_HZ;
+            }
         }
-        return false;
+        return timedOut;
+    }
+
+    /**
+     * 门铃/调度器探针（真机诊断）：
+     * - db[slot] 读回：门铃寄存器是否显示 pending（xHC 是否消费了敲门）；
+     * - mfi0/mfi1（50ms 间隔）：MFINDEX 帧计数器是否在走——不走则 xHC
+     *   无法调度任何总线事务，EP0 传输永远不会执行；
+     * - usbsts：HCH/CNR 等运行状态。
+     */
+    private void probeDoorbell(int slot) {
+        StrBuilder a = new StrBuilder();
+        a.append("xhci: probe db[");
+        appendDec(a, slot);
+        a.append("]=");
+        appendHex(a, System.read32(dbBase + (long) slot * 4));
+        a.append(" mfi0=");
+        appendHex(a, System.read32(rtBase));
+        long dl = Timer.getTicks() + Timer.TICK_HZ / 20;
+        while (Timer.getTicks() < dl) {
+        }
+        a.append(" mfi1=");
+        appendHex(a, System.read32(rtBase));
+        a.append(" sts=");
+        appendHex(a, System.read32(opBase + OP_USBSTS));
+        uartFree(a);
     }
 
     private void ringCommandDoorbell() {
-        System.write32(dbBase, 0);   // DB[0]：命令门铃
+        kr_mem_fence();                      // 命令 TRB 写先于门铃可见
+        System.write32(dbBase, 0);           // DB[0]：命令门铃
     }
 
     private void ringEpDoorbell(int slot) {
+        kr_mem_fence();                      // 传输 TRB 写先于门铃可见
         System.write32(dbBase + (long) slot * 4, 1);   // EP0 target=1
     }
 
@@ -437,6 +838,9 @@ class XhciDriver implements IDriver, IHc {
         Memory.free(dm2);
         dbg2.dispose();
         capLength = (int) System.read8(bar + 0) & 0xFF;
+        // HCIVERSION 在 capbase 字的高 16 位（bar+2）；该寄存器只接受 32 位
+        // 访问——此前用 read16 读恒得 0（真机实测 HCIVERSION=0x100）。
+        hciVersion = (int) (System.read32(bar) >>> 16) & 0xFFFF;
         hcsparams1 = System.read32(bar + CAP_HCSPARAMS1);
         hcsparams2 = System.read32(bar + CAP_HCSPARAMS2);
         hcsparams3 = System.read32(bar + CAP_HCSPARAMS3);
@@ -454,6 +858,24 @@ class XhciDriver implements IDriver, IHc {
         portCount = (hcsparams1 >>> 24) & 0xff;   // MaxPorts [31:24]
         if ((hccparams1 & (1 << 2)) != 0) ctxSize = 64;
         else ctxSize = 32;
+        // 调试：CSZ/ctxSize（context 大小判断错误会破坏内存布局）
+        StrBuilder csz = new StrBuilder();
+        csz.append("xhci: hcc1=0x");
+        csz.append(StrUtils.toHex((long) hccparams1));
+        csz.append(" CSZ=");
+        csz.append(StrUtils.toDec((hccparams1 >>> 2) & 1));
+        csz.append(" ver=0x");
+        csz.append(StrUtils.toHex((long) hciVersion));
+        csz.append(" ctxSize=");
+        csz.append(StrUtils.toDec(ctxSize));
+        csz.append(" hcsp2=0x");
+        csz.append(StrUtils.toHex((long) hcsparams2));
+        csz.append(" hcsp3=0x");
+        csz.append(StrUtils.toHex((long) hcsparams3));
+        str csm = csz.build();
+        uart(csm);
+        Memory.free(csm);
+        csz.dispose();
         opBase = bar + (long) capLength;
         long dboff = (long) System.read32(bar + CAP_DBOFF) & 0xFFFFFFFFL;
         long rtsoff = (long) System.read32(bar + CAP_RTSOFF) & 0xFFFFFFFFL;
@@ -463,17 +885,40 @@ class XhciDriver implements IDriver, IHc {
         logInit();
     }
 
-    /** xECP 遍历：USB Legacy 支持（BIOS/旧栈接管，真机必需；QEMU 无此能力自动跳过）。
-     * 注意：xECP 指针是 32 位字偏移，地址 = bar + xecp * 4。 */
+    /** xECP 遍历：USB Legacy + Supported Protocol（Cap ID=2）。首个 xECP 在
+     * bar + hccparams1[31:16]*4；后续 next 是相对当前 cap 的 DWORD 偏移。 */
     private void legacyHandoff() {
         uart("xhci: legacy handoff");
-        int xecp = (hccparams1 >>> 16) & 0xffff;
-        while (xecp != 0) {
-            long capVa = bar + (long) xecp * 4;
-            int capId = System.read32(capVa) & 0xff;
+        int ptr = (hccparams1 >>> 16) & 0xffff;
+        long capVa = bar + (long) ptr * 4;
+        int steps = 0;
+        while (ptr != 0 && steps < 8) {
+            int dw0 = System.read32(capVa);
+            int capId = dw0 & 0xff;
+            int next = (dw0 >>> 8) & 0xff;
+            StrBuilder tr = new StrBuilder();
+            tr.append("xhci: xecp id");
+            tr.append(StrUtils.toDec(capId));
+            tr.append(" @0x");
+            tr.append(StrUtils.toHex((long) (ptr * 4)));
+            tr.append(" dw0=");
+            tr.append(StrUtils.toHex((long) dw0));
+            tr.append(" dw1=");
+            tr.append(StrUtils.toHex((long) System.read32(capVa + 4)));
+            tr.append(" dw2=");
+            tr.append(StrUtils.toHex((long) System.read32(capVa + 8)));
+            tr.append(" dw3=");
+            tr.append(StrUtils.toHex((long) System.read32(capVa + 12)));
+            if (capId == 2) {
+                int dw2 = System.read32(capVa + 8);
+                tr.append(" PROTO off");
+                tr.append(StrUtils.toDec((int) dw2 & 0xff));
+                tr.append(" cnt");
+                tr.append(StrUtils.toDec((int) ((dw2 >>> 8) & 0xff)));
+            }
             if (capId == EXT_CAPS_LEGACY) {
-                long sup = capVa;                 // USBLEGSUP
-                long ctl = capVa + 4;             // USBLEGCTL
+                long sup = capVa;
+                long ctl = capVa + 4;
                 if ((System.read32(sup) & LEGACY_BIOS_OWNED) != 0) {
                     System.write32(ctl, System.read32(ctl) | LEGACY_OS_OWNED);
                     long deadline = Timer.getTicks() + Timer.TICK_HZ;
@@ -481,9 +926,15 @@ class XhciDriver implements IDriver, IHc {
                         if ((System.read32(sup) & LEGACY_BIOS_OWNED) == 0) break;
                     }
                 }
-                return;
             }
-            xecp = (System.read32(capVa) >>> 8) & 0xff;
+            str tm = tr.build();
+            uart(tm);
+            Memory.free(tm);
+            tr.dispose();
+            if (next == 0) break;
+            capVa = capVa + (long) next * 4;
+            ptr += next;
+            steps += 1;
         }
     }
 
@@ -519,15 +970,44 @@ class XhciDriver implements IDriver, IHc {
 
         int scratch = ((hcsparams2 >>> 16) & 0x3e0) | ((hcsparams2 >>> 27) & 0x1f);
         if (scratch > 0) {
-            // scratchpad 缓冲大小来自 HCSPARAMS3[15:0]（0 时按 4096）
-            int spSize = hcsparams3 & 0xffff;
-            if (spSize == 0) spSize = 4096;
-            long spArray = allocAligned(scratch * 8, 64);
+            // Scratchpad buffer 大小 = PAGESIZE（xHCI 5.4.3：操作区 +0x08 的 Page Size
+            // 寄存器，bit n 置位 = 支持 2^(n+12) 页），且必须按 PAGESIZE 对齐（4.20）。
+            // 之前误读 HCSPARAMS3[15:0]（那是 U1 Device Exit Latency！真机 = 1），
+            // 导致只分配 1 字节 → xHC 按页 DMA 写穿堆。对齐 Linux xhci_hcd_page_size()。
+            int psReg = System.read32(opBase + OP_PAGESIZE) & 0xffff;
+            int pageSize = 4096;
+            if (psReg != 0) {
+                // 找最低置位位 n → 页大小 2^(n+12)（Linux 校验 2 的幂后 page_size<<12）
+                int n = 0;
+                int v = psReg;
+                while ((v & 1) == 0) {
+                    v >>>= 1;
+                    n += 1;
+                }
+                pageSize = 1 << (n + 12);
+            }
+            long spArray = allocAligned(scratch * 8, pageSize);
             for (int i = 0; i < scratch; i++) {
-                long sp = allocAligned(spSize, 64);
+                long sp = allocAligned(pageSize, pageSize);
+                zero(sp, pageSize);
                 write64(spArray, (long) i * 8, MemoryLayout.virtToPhys(sp));
             }
             write64(dcbaa, 0, MemoryLayout.virtToPhys(spArray));
+            StrBuilder spd = new StrBuilder();
+            spd.append("xhci: scratchpad n=");
+            str sn = StrUtils.toDec(scratch);
+            spd.append(sn);
+            Memory.free(sn);
+            spd.append(" psReg=0x");
+            spd.append(StrUtils.toHex((long) psReg));
+            spd.append(" pageSize=");
+            str pss = StrUtils.toDec(pageSize);
+            spd.append(pss);
+            Memory.free(pss);
+            str spm = spd.build();
+            uart(spm);
+            Memory.free(spm);
+            spd.dispose();
         }
 
         // 命令环（停态写 CRCR）
@@ -556,14 +1036,29 @@ class XhciDriver implements IDriver, IHc {
             if ((System.read32(opBase + OP_USBSTS) & USBSTS_HCH) == 0) break;
         }
 
-        cdns3PlatStart();
+        // 禁止 xHCI 中断（事件环靠轮询，不需要中断；真机 PLIC 未注册 IRQ
+        // handler，事件中断会触发 dispatch 空指针崩溃）：
+        // USBCMD.INTE=0，中断器 0 的 IMAN.IE=0
+        System.write32(opBase + OP_USBCMD, System.read32(opBase + OP_USBCMD) & ~0x4);
+        System.write32(rtBase + 0x20, System.read32(rtBase + 0x20) & ~0x2);
+
+        // 注意：不写 plat_start（USBCMD bit4 / 0x8120 bit15 / 0x8000 bit25）。
+        // 主线 Linux 的 plat_start 是 2022 年为"超速 hub 复位"加的平台补丁，
+        // Milk-V SDK 内核（usb2_only）启动时从不写这些——多写的 0x8000 bit25
+        // 可能干扰端口状态/过流检测。
 
         slots = new XhciSlotState[maxSlots + 1];
 
-        // 端口上电（真机 cdns3 端口可能默认不上电；PPC=0 时写 1 无副作用）+
-        // 诊断：逐端口打印 PORTSC
+        sweepBuf = Memory.malloc(65536 + 64);
+        if (sweepBuf != 0) sweepBuf = (sweepBuf + 63) & ~63L;
+
+        // 端口上电：只写 PP（portscWrite 保留 RO/RWS 位）。注意不能顺手清
+        // 变化位——设备上电即检测到连接时 CSC 会被这次清除吃掉，轮询线程
+        // 将永远等不到插拔事件（QEMU 实测：连着的设备 CSC 置位后即被清，
+        // 之后不再枚举；真机连接检测滞后才侥幸绕过）。残留的伪变化位由
+        // 轮询线程按 CCS 判定处理（CCS=0 时走安全复位路径）。
         for (int p = 0; p < portCount; p++) {
-            System.write32(portscAddr(p), readPortsc(p) | PSC_PP);
+            portscWrite(p, PSC_PP);
             long dl = Timer.getTicks() + Timer.TICK_HZ / 10;
             while (Timer.getTicks() < dl) {
                 if ((readPortsc(p) & PSC_PP) != 0) break;
@@ -573,7 +1068,7 @@ class XhciDriver implements IDriver, IHc {
             str ps = StrUtils.toDec(p);
             dbg.append(ps);
             Memory.free(ps);
-            dbg.append(" sc=");
+            dbg.append(" full=");
             dbg.append(StrUtils.toHex((long) readPortsc(p)));
             str dm = dbg.build();
             uart(dm);
@@ -586,17 +1081,56 @@ class XhciDriver implements IDriver, IHc {
 
     // ── 工具 ──
 
-    /** cdns3 专属 xHCI 启动配置（对齐 Linux xhci_cdns3_plat_start，U-Boot 缺失）：
-     *  USBCMD.EU3S + XECP 寄存器（RxDetect P3 使能 / LPM→STB 切换）。 */
-    private void cdns3PlatStart() {
-        System.write32(opBase + OP_USBCMD, System.read32(opBase + OP_USBCMD) | 0x10);
-        System.write32(bar + 0x8120, System.read32(bar + 0x8120) | (1 << 15));
-        System.write32(bar + 0x8000, System.read32(bar + 0x8000) | (1 << 25));
-        uart("xhci: cdns3 plat start done");
-    }
-
     private void uart(str msg) {
         BspKrMain.arch.getUart().println(msg);
+    }
+
+    /** 构建 → 打印 → 释放（StrBuilder 生命周期收尾）。 */
+    private static void uartFree(StrBuilder sb) {
+        str m = sb.build();
+        BspKrMain.arch.getUart().println(m);
+        Memory.free(m);
+        sb.dispose();
+    }
+
+    private static void appendHex(StrBuilder sb, int v) {
+        str h = StrUtils.toHex((long) v & 0xFFFFFFFFL);
+        sb.append(h);
+        Memory.free(h);
+    }
+
+    private static void appendDec(StrBuilder sb, int v) {
+        str d = StrUtils.toDec(v);
+        sb.append(d);
+        Memory.free(d);
+    }
+
+    /** 门铃前同步 DMA 读侧缓冲：回写 L2（仅真机 JH7110；fence 由 ringXxxDoorbell 负责）。 */
+    private void dmaClean(long va, int len) {
+        if (dmaNeedClean && va != 0 && len > 0) cache_clean_range(va, len);
+    }
+
+    /**
+     * 缓存陈旧实验：读 64KB 假缓冲，强制逐出 L1 中所有陈旧行。
+     * 若轮询/数据读取此前因"先读后 DMA 写"而陈旧，横扫后重读应看到新值。
+     */
+    private void cacheSweep() {
+        if (sweepBuf == 0) return;
+        for (int i = 0; i < 16384; i++) {
+            sweepAcc ^= System.read32(sweepBuf + (long) i * 4);
+        }
+        if (sweepAcc == 0x12345678) uart("xhci: sweep acc magic");   // 防优化
+    }
+
+    /** 调试：打印缓冲前 n 字节。 */
+    private void dumpBytes(str tag, long va, int n) {
+        StrBuilder b = new StrBuilder();
+        b.append(tag);
+        for (int i = 0; i < n; i++) {
+            b.append(" ");
+            appendHex(b, (int) System.read8(va + (long) i) & 0xFF);
+        }
+        uartFree(b);
     }
 
     private long portscAddr(int port) -> opBase + OP_PORTSC_BASE + (long) port * OP_PORTSC_STRIDE

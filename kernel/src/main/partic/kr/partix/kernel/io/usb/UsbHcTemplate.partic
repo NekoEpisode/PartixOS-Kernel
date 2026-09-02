@@ -42,7 +42,7 @@ class UsbHcTemplate implements IDriver {
             long lo = (long) io.readConfig32(p.bus, p.slot, p.func, 0x10) & 0xFFFFFFFFL;
             long hi = (long) io.readConfig32(p.bus, p.slot, p.func, 0x14) & 0xFFFFFFFFL;
             long barPhys = (lo & 0xFFFFFFF0L) | (hi << 32);
-            return new XhciDriver(barPhys, p.progIF);
+            return new XhciDriver(barPhys, p.progIF, false);
         }
         StartupLogger.warn("usb: unsupported host controller type (progIF), skipped");
         return null;

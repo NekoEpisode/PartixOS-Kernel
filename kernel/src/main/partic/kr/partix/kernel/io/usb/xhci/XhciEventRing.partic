@@ -23,6 +23,8 @@ class XhciEventRing {
 
     boolean isOk() -> ok
     long getPhys() -> phys
+    long getVa() -> va
+    int getDeqIndex() -> deqIndex
 
     /** 当前消费位置的物理地址（更新 ERDP 用）。 */
     long getDequeuePhys() -> phys + (long) deqIndex * 16

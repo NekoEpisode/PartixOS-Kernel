@@ -18,6 +18,9 @@ interface IHc {
     boolean isPortChanged(int port);
     void clearPortChanged(int port);
 
+    /** 确保根端口上电（写 PP；真机某些控制器可能清除 PP，轮询需持续保持）。 */
+    void powerPort(int port);
+
     /** 复位根端口并等待链路就绪；返回是否成功。 */
     boolean resetPort(int port);
 

@@ -9,7 +9,9 @@ import kr.partix.kernel.io.drivers.DriverType;
 import kr.partix.kernel.io.drivers.IDriver;
 import kr.partix.kernel.log.StartupLogger;
 import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.sched.Scheduler;
 import kr.partix.kernel.sys.System;
+import kr.partix.kernel.timer.Timer;
 import lang.partic.stdlib.additional.utils.StrBuilder;
 import lang.partic.stdlib.additional.utils.StrUtils;
 import lang.partic.stdlib.core.memory.Memory;
@@ -66,6 +68,8 @@ class UsbCore {
     private static void pollRoot(UsbRoot root) {
         IHc hc = root.getHc();
         for (int p = 0; p < root.getPortCount(); p++) {
+            // 持续确保端口上电（真机 cdns3 可能清除 PP，掉电后不检测设备）
+            hc.powerPort(p);
             pollPort(hc, root.getPort(p));
         }
     }
@@ -100,10 +104,19 @@ class UsbCore {
         } else {
             UsbHub.clearChanged(hc, hub.getAddress(), port.getPort());
         }
-        // 连接判定
+        // 连接判定：CSC 置位后 CCS 可能仍在稳定（插入瞬态），短延时重试。
+        // 注意：变化位 + CCS=0 就是断开/空口（QEMU 等控制器初始化时所有
+        // 端口都会置一次 CSC），正确动作是清位后等待下次连接，绝不复位空口。
         boolean connected;
         if (hub == null) {
             connected = hc.isPortConnected(port.getPort());
+            if (!connected) {
+                long dl = Timer.getTicks() + Timer.TICK_HZ / 10;
+                while (Timer.getTicks() < dl) {
+                    connected = hc.isPortConnected(port.getPort());
+                    if (connected) break;
+                }
+            }
         } else {
             int[] pst = new int[2];
             if (!UsbHub.getPortStatus(hc, hub.getAddress(), port.getPort(), pst)) return;
@@ -130,43 +143,93 @@ class UsbCore {
 
     private static void attach(IHc hc, UsbPort port) {
         USBDevice hub = port.getHub();
-        int speed;
-        if (hub == null) {
-            if (!hc.resetPort(port.getPort())) {
-                uart("usb: port reset failed");
-                return;
-            }
-            speed = hc.getPortSpeed(port.getPort());
-        } else {
-            int hubAddr = hub.getAddress();
-            if (!UsbHub.resetPort(hc, hubAddr, port.getPort())) {
-                uart("usb: hub port reset failed");
-                return;
-            }
-            int[] pst = new int[2];
-            if (!UsbHub.getPortStatus(hc, hubAddr, port.getPort(), pst)) {
-                uart("usb: hub port status failed");
-                return;
-            }
-            speed = UsbHub.speedOf(pst);
-        }
-
         long route = routeOf(port);
         int rootPort = rootPortOf(port);
-        int[] tt = ttOf(port, speed);
-        int addr = hc.addressDevice(rootPort, route, speed, tt[0], tt[1]);
-        if (addr == 0) {
-            uart("usb: address device failed");
-            return;
-        }
 
-        long buf = Memory.malloc(64);
-        boolean ok = hc.controlTransfer(addr, 0x80, 6, 0x0100, 0, 18, buf);
-        if (!ok) {
-            uart("usb: device descriptor read failed");
+        // 诊断：一次连接最多尝试 3 次完整枚举（复位→寻址→读描述符），
+        // 每次间隔 600ms。失败后仍能看到多次样本；成功即跳出。
+        int addr = 0;
+        int speed = 0;
+        long buf = 0;
+        boolean descOk = false;
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            StrBuilder ta = new StrBuilder();
+            ta.append("usb: attach attempt=");
+            str tas = StrUtils.toDec(attempt);
+            ta.append(tas);
+            Memory.free(tas);
+            str tam = ta.build();
+            uart(tam);
+            Memory.free(tam);
+            ta.dispose();
+
+            if (hub == null) {
+                if (!hc.resetPort(port.getPort())) {
+                    uart("usb: port reset failed");
+                    return;
+                }
+                speed = hc.getPortSpeed(port.getPort());
+            } else {
+                int hubAddr = hub.getAddress();
+                if (!UsbHub.resetPort(hc, hubAddr, port.getPort())) {
+                    uart("usb: hub port reset failed");
+                    return;
+                }
+                int[] pst = new int[2];
+                if (!UsbHub.getPortStatus(hc, hubAddr, port.getPort(), pst)) {
+                    uart("usb: hub port status failed");
+                    return;
+                }
+                speed = UsbHub.speedOf(pst);
+            }
+
+            int[] tt = ttOf(port, speed);
+            StrBuilder ds = new StrBuilder();
+            ds.append("usb: reset ok speed=");
+            ds.append(StrUtils.toDec(speed));
+            str dsm = ds.build();
+            uart(dsm);
+            Memory.free(dsm);
+            ds.dispose();
+            addr = hc.addressDevice(rootPort, route, speed, tt[0], tt[1]);
+            if (addr == 0) {
+                uart("usb: address device failed");
+                if (attempt < 3) Scheduler.sleep(600);
+                continue;
+            }
+            StrBuilder as = new StrBuilder();
+            as.append("usb: addressed addr=");
+            as.append(StrUtils.toDec(addr));
+            str am = as.build();
+            uart(am);
+            Memory.free(am);
+            as.dispose();
+
+            buf = Memory.malloc(64);
+            descOk = hc.controlTransfer(addr, 0x80, 6, 0x0100, 0, 18, buf);
+            if (descOk) break;
+            uart("usb: desc read failed, retrying...");
             Memory.free(buf);
+            buf = 0;
+            if (attempt < 3) Scheduler.sleep(600);
+        }
+        if (!descOk) {
+            uart("usb: device descriptor read failed");
+            // 总线探针：若设备在总线上有响应（哪怕 STALL/错误），xHC 都会产生
+            // Transfer Event——区分"总线根本没流量"vs"设备 NAK/STALL 一切"。
+            if (addr > 0) probeBus(hc, addr);
             return;
         }
+        uart("usb: descriptor read ok");
+        // 诊断：鼠标（LS）第一次传输成功、第二次必挂。此处做"同请求二次
+        // 传输"实验：环推进到 idx3 后重发完全相同的请求——
+        // - 成功 → 环复用没问题，问题在请求内容/后续流程；
+        // - 失败 → 环位置/EP 状态问题（xHC 不会从新位置执行 TD）。
+        long b2 = Memory.malloc(64);
+        uart("usb: EXPERIMENT repeat same GET_DESCRIPTOR...");
+        boolean ok2 = hc.controlTransfer(addr, 0x80, 6, 0x0100, 0, 18, b2);
+        uart(ok2 ? "usb: repeat-transfer OK" : "usb: repeat-transfer FAILED");
+        Memory.free(b2);
         int vid = ((int) System.read8(buf + 8) & 0xFF)
                 | (((int) System.read8(buf + 9) & 0xFF) << 8);
         int pid = ((int) System.read8(buf + 10) & 0xFF)
@@ -278,6 +341,24 @@ class UsbCore {
         out[0] = h.getAddress();
         out[1] = portOnTt;
         return out;
+    }
+
+    /**
+     * 失败后的总线探针：① GET_STATUS（IN 2 字节，合法请求）；② 无效的
+     * GET_DESCRIPTOR wLength=0（设备应 STALL）。只要总线上有任何往来，
+     * xHC 都会产生事件（xhci 层会打印 type/cc）——据此区分：
+     * - 两探针都无事件 → xHC 根本没往总线上发东西（调度器/内部状态问题）；
+     * - 有事件（哪怕 cc=STALL/错误）→ 总线活着，设备在响应/拒绝。
+     */
+    private static void probeBus(IHc hc, int addr) {
+        long b = Memory.malloc(8);
+        uart("usb: bus probe GET_STATUS...");
+        boolean ok1 = hc.controlTransfer(addr, 0x80, 0, 0, 0, 2, b);
+        uart(ok1 ? "usb: probe GET_STATUS ok" : "usb: probe GET_STATUS failed");
+        uart("usb: bus probe zero-len GET_DESCRIPTOR...");
+        boolean ok2 = hc.controlTransfer(addr, 0x80, 6, 0x0100, 0, 0, 0);
+        uart(ok2 ? "usb: probe zero-len ok(?!)" : "usb: probe zero-len failed");
+        Memory.free(b);
     }
 
     private static void uart(str msg) {

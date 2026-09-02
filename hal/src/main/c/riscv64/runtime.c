@@ -91,6 +91,29 @@ void sys_arch_unprotect(unsigned int lev) { (void)lev; }
 #define L2_CACHE_BASE_ADDR  0x2010000
 #define CACHELINE_SIZE      64
 
+// ── 关中断打印守卫（riscv64）────────────────────────────────────────────
+// 内核当前单核 + 抢占式调度：若 println 逐字符发送期间被 tick 抢占，
+// 另一线程插入打印会导致 UART 行交错/丢字节。整行打印应关中断
+// （csrci sstatus.SIE）。save/restore 成对使用以支持嵌套（异常/关中断
+// 上下文内打印不会错误地重新开中断）。
+long kr_irq_save(void) {
+    long s;
+    __asm__ __volatile__("csrrci %0, sstatus, 0x2" : "=r"(s) : : "memory");
+    return s;
+}
+
+void kr_irq_restore(long s) {
+    if (s & 0x2) {
+        __asm__ __volatile__("csrsi sstatus, 0x2" ::: "memory");
+    }
+}
+
+// CPU↔设备顺序栅栏：doorbell/命令写之前确保先前的普通内存写已发出
+// （RISC-V 弱序：MMIO 写可能先于 DRAM 写被设备观察到）。
+void kr_mem_fence(void) {
+    __asm__ __volatile__("fence iorw, iorw" ::: "memory");
+}
+
 void cache_clean_range(uint64_t addr, uint64_t size) {
     if (size == 0) return;
     volatile unsigned long *flush64 =

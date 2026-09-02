@@ -1,6 +1,7 @@
 package kr.partix.kernel.io.usb;
 
 import kr.partix.kernel.log.StartupLogger;
+import kr.partix.kernel.main.BspKrMain;
 import kr.partix.kernel.memory.MemoryLayout;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.timer.Timer;
@@ -23,7 +24,6 @@ class Jh7110UsbPlatform {
     private static final long SYS_SYSCON  = 0x13030000L;
     private static final long SYS_GPIO    = 0x13040000L;
     private static final long PHY2_BASE   = 0x10200000L;
-    private static final long PHY3_BASE   = 0x10210000L;
 
     private static final long STG_RESET_ASSERT = 0x74;
     private static final long STG_RESET_STATUS = 0x78;
@@ -37,12 +37,15 @@ class Jh7110UsbPlatform {
     private static final int CLK_LPM         = 194;
     private static final int CLK_STB         = 195;
     private static final int CLK_APP_125     = 196;
+    private static final int CLK_PCIE0_APB   = 199;   // cdns3 dts "phy" 时钟（pciephy0 APB）
 
     // 复位：USB 全在 STGCRG 组（id/32 = 4），位 = 1 << (id%32)
     private static final int RST_USB_AXI     = 135;   // bit 7
     private static final int RST_USB_APB     = 136;   // bit 8
     private static final int RST_USB_UTMI_APB = 137;  // bit 9
     private static final int RST_USB_PWRUP   = 138;   // bit 10
+    private static final int RST_PLDA_PCIE_APB = 144; // bit 16；cdns3 dts "phy" 复位
+                                                      // （Milk-V SDK usb2-only 板也释放）
 
     // stg syscon 位（cdns3-starfive.c）
     private static final int USB_STRAP_HOST        = 2 << 0x10;
@@ -53,34 +56,84 @@ class Jh7110UsbPlatform {
     private static final int USB_PLL_EN            = 1 << 0x16;
     private static final int USB_REFCLK_MODE       = 1 << 0x17;
     private static final int USB_PDRSTN_SPLIT      = 1 << 0x11;
-    private static final int PCIE_CKREF_SRC_MASK   = 0xC0000;
-    private static final int PCIE_CLK_SEL_MASK     = 0x300000;
-    private static final int PCIE_PHY_MODE_MASK    = 0x300000;
-    private static final int PCIE_USB3_BUS_WIDTH   = 0xC;
-    private static final int PCIE_USB3_RATE        = 0x60;
-    private static final int PCIE_USB3_RX_STANDBY  = 0x80;
-    private static final int PCIE_USB3_PHY_ENABLE  = 0x10;
 
     private static final long USB_LS_KEEPALIVE_OFF = 0x4;
-    private static final long USB3_PHY_PLL_CTL_OFF = 0x7c;
 
-    // SYS GPIO pin 25 → USB_DRIVE_VBUS（Mars dts usb0_pins，GPOUT_SYS_USB_DRIVE_VBUS=7）
+    // SYS IOMUX_APB：sysgpio 的 APB 时钟/复位（Linux pinctrl probe 必做，否则 GPIO pad 输出不生效）
+    private static final int SYS_IOMUX_CLK_ID = 112;              // 寄存器 = SYS_CLKGEN + id*4 = 0x1C0
+    private static final long SYS_RESET_ASSERT = 0x2F8;
+    private static final long SYS_RESET_STATUS = 0x308;
+    private static final int RST_IOMUX_APB = 2;                   // 组 0，bit2
+
+    // SYS GPIO pin 25 → VBUS 使能。DOUT=1（GPOUT_HIGH 常量高）直接驱动 pad；
+    // 不用 GPOUT_SYS_USB_DRIVE_VBUS(7)——该信号源实测为低（pad 输出低、VBUS 无电）。
     private static final int VBUS_PIN = 25;
-    private static final int VBUS_DOUT_SIGNAL = 7;
+    private static final int VBUS_DOUT_SIGNAL = 1;
+
+    // 仅 JH7110 真机置位：diagUsb 读的是 Mars 板级 MMIO（SYS_GPIO/PHY2），
+    // QEMU 等平台没有这些映射，必须门控，否则轮询线程会 access fault。
+    private static boolean jh7110Ready = false;
 
     static void initUsb(long otgBase) {
         StartupLogger.info("jh7110-usb: platform init");
+        enableIomux();
         enableVbus();
-        modeAndPhy();
+        modeSet();
         enableClocks();
         deassertResets();
         set125m();
         setPhyRegs();
         switchHost(otgBase);
+        phySetModeHost();
+        jh7110Ready = true;
         // 核心上电 + PHY 锁定需时间，多等一会
         long deadline = Timer.getTicks() + Timer.TICK_HZ / 5;
         while (Timer.getTicks() < deadline) {
         }
+    }
+
+    /** sysgpio 的 APB 时钟 + 复位（Linux jh7110_pinctrl_probe 的 clk_prepare_enable
+     *  + reset_control_deassert；缺这一步 GPIO 寄存器可读写但 pad 不驱动）。 */
+    private static void enableIomux() {
+        long sysclk = MemoryLayout.physToVirt(SYS_CLKGEN);
+        long gate = sysclk + (long) SYS_IOMUX_CLK_ID * 4;
+        System.write32(gate, System.read32(gate) | CLK_GATE);
+        long assertReg = sysclk + SYS_RESET_ASSERT;
+        long statusReg = sysclk + SYS_RESET_STATUS;
+        int bit = 1 << RST_IOMUX_APB;
+        System.write32(assertReg, System.read32(assertReg) & ~bit);
+        long deadline = Timer.getTicks() + Timer.TICK_HZ / 10;
+        while (Timer.getTicks() < deadline) {
+            if ((System.read32(statusReg) & bit) != 0) break;
+        }
+        // ══ Milk-V 专有修复：USB overcurrent（原因未明，官方如此写）══
+        // 现象：JH7110 cdns3 的 HS 根端口（port0）从复位起持续 OCA=1（过流），
+        //   硬件因此把 PP 拉回 0——端口无法上电，永远检测不到设备。
+        // 排查：软件初始化已逐项对齐主线 Linux 与 StarFive SDK（时钟/复位/
+        //   PHY/OTG/xHCI），无效；VBUS 供电常开与 GPIO 无关（原理图证实 OC
+        //   检测实际进了 VL805，不接 JH7110）；修改 xHCI 端口配置也无效。
+        // 最终在 Milk-V 官方内核（mars-buildroot-sdk）pinctrl 驱动中发现：
+        //   drivers/pinctrl/starfive/pinctrl-starfive-jh7110.c 在 probe 时对
+        //   compatible "milk-v,mars" 的板子执行：
+        //       /* hack: force 1 on USB overcurrent */
+        //       pinctrl_set_reg(padctl_base + 0x80, 1, 16, GENMASK(22,16));
+        //   即写 SYS_GPIO+0x80（GPI 输入信号选择区）的 bits 22:16 = 1<<16。
+        // 该寄存器并非常规 OC 使能/屏蔽位（语义不明，寄存器手册无此描述），
+        // 但官方内核实测有效：写入后 port0 OCA=0、端口可上电、键盘正常枚举
+        // （Milk-V Debian 镜像验证）。此处照抄官方写法，不理解其机制。
+        long gpi = MemoryLayout.physToVirt(SYS_GPIO) + 0x80;
+        System.write32(gpi, (System.read32(gpi) & ~0x7F0000) | 0x10000);
+        StrBuilder sb = new StrBuilder();
+        sb.append("jh7110-usb: iomux gate=");
+        sb.append(StrUtils.toHex((long) System.read32(gate)));
+        sb.append(" rst=");
+        sb.append(StrUtils.toHex((long) System.read32(assertReg)));
+        sb.append(" gpi80=");
+        sb.append(StrUtils.toHex((long) System.read32(gpi)));
+        str m = sb.build();
+        StartupLogger.info(m);
+        Memory.free(m);
+        sb.dispose();
     }
 
     /** cdns3 OTG 切 host：写 OTGCMD（HOST_BUS_REQ|OTG_DIS）→ 等 XHCI_READY。
@@ -153,41 +206,26 @@ class Jh7110UsbPlatform {
         sb.dispose();
     }
 
-    /** USB 模式（host）+ UTMI/pipe PHY 配置（stg/sys syscon）。 */
-    private static void modeAndPhy() {
+    /** USB 模式配置（对齐 Linux cdns3-starfive.c cdns_mode_init）。
+     * 仅 stg+0x4：USB_MISC_CFG(23:20)=BYPS|PLL_EN|REFCLK_MODE（bit21 清零）
+     * + HOST strap + suspendm。主线 dtsi 不引 pciephy0，不写 stg148/1f4。 */
+    private static void modeSet() {
         long stg = MemoryLayout.physToVirt(STG_SYSCON);
-        long sys = MemoryLayout.physToVirt(SYS_SYSCON);
-        setBits(stg + 0x4, USB_SUSPENDM_BYPS);
-        setBits(stg + 0x4, USB_PLL_EN);
-        setBits(stg + 0x4, USB_REFCLK_MODE);
-        clearBits(stg + 0xc4, PCIE_CKREF_SRC_MASK);
-        clearBits(stg + 0xc4, PCIE_CLK_SEL_MASK);
-        setField(stg + 0x148, 0x100000, PCIE_PHY_MODE_MASK);   // mode=1（USB3），勿写 0x300000
-        clearBits(stg + 0x1f4, PCIE_USB3_BUS_WIDTH);
-        clearBits(stg + 0x1f4, PCIE_USB3_RATE);
-        clearBits(stg + 0x1f4, PCIE_USB3_RX_STANDBY);
-        setBits(stg + 0x1f4, PCIE_USB3_PHY_ENABLE);
-        setBits(sys + 0x18, USB_PDRSTN_SPLIT);   // U-Boot usb2 phy set_mode 置 1
+        setField(stg + 0x4, USB_SUSPENDM_BYPS | USB_PLL_EN | USB_REFCLK_MODE, 0xF00000);
         setField(stg + 0x4, USB_STRAP_HOST, USB_STRAP_MASK);
         setField(stg + 0x4, USB_SUSPENDM_HOST, USB_SUSPENDM_MASK);
         StrBuilder sb = new StrBuilder();
         sb.append("jh7110-usb: stg4=");
         sb.append(StrUtils.toHex((long) System.read32(stg + 0x4)));
-        sb.append(" stgc4=");
-        sb.append(StrUtils.toHex((long) System.read32(stg + 0xc4)));
-        sb.append(" stg148=");
-        sb.append(StrUtils.toHex((long) System.read32(stg + 0x148)));
-        sb.append(" stg1f4=");
-        sb.append(StrUtils.toHex((long) System.read32(stg + 0x1f4)));
-        sb.append(" sys18=");
-        sb.append(StrUtils.toHex((long) System.read32(sys + 0x18)));
         str m = sb.build();
         StartupLogger.info(m);
         Memory.free(m);
         sb.dispose();
     }
 
-    /** STG CRG 的 USB 时钟门打开（125M 分频由 U-Boot 配置，这里不动）。 */
+    /** STG CRG 的 USB 时钟门打开（125M 分频由 U-Boot 配置，这里不动）。
+     * 与 SDK dts 一致：8 个时钟全开（含 pciephy0 的 "phy" APB 时钟，
+     * Milk-V usb2-only 板同样列出并使能）。 */
     private static void enableClocks() {
         enableClock(CLK_USB_APB);
         enableClock(CLK_UTMI_APB);
@@ -195,6 +233,7 @@ class Jh7110UsbPlatform {
         enableClock(CLK_LPM);
         enableClock(CLK_STB);
         enableClock(CLK_APP_125);
+        enableClock(CLK_PCIE0_APB);
         StrBuilder sb = new StrBuilder();
         sb.append("jh7110-usb: gates 04..18=");
         for (int off = 4; off <= 0x18; off += 4) {
@@ -212,12 +251,14 @@ class Jh7110UsbPlatform {
         System.write32(reg, System.read32(reg) | CLK_GATE);
     }
 
-    /** 释放 USB 复位（STGCRG assert 位清 + 等 status 清）。 */
+    /** 释放 USB 复位（STGCRG assert 位清 + 等 status 清）。
+     * 与 SDK dts 一致：5 个复位全释放（含 pciephy0 的 "phy" APB 复位）。 */
     private static void deassertResets() {
         deassertReset(RST_USB_PWRUP);
         deassertReset(RST_USB_APB);
         deassertReset(RST_USB_AXI);
         deassertReset(RST_USB_UTMI_APB);
+        deassertReset(RST_PLDA_PCIE_APB);
         long base = MemoryLayout.physToVirt(STG_CRG);
         StrBuilder sb = new StrBuilder();
         sb.append("jh7110-usb: rst assert=0x");
@@ -243,71 +284,84 @@ class Jh7110UsbPlatform {
         }
     }
 
-    /** USB2/3 PHY 控制寄存器（对齐 Linux phy-jh7110-usb.c / phy-jh7110-pcie.c）。 */
+    /** USB2 PHY 初始化：仅 keepalive 等（对齐 Milk-V SDK 实测：phy2+0=0x8，
+     *  不写 RX_NORMAL_PWR——主线 2025 补丁的 bit1 在 SDK 里不存在）。 */
     private static void setPhyRegs() {
         long phy2 = MemoryLayout.physToVirt(PHY2_BASE);
-        long phy3 = MemoryLayout.physToVirt(PHY3_BASE);
-        // USB2 PHY 时钟模式：RX normal power（Linux jh7110_usb2_phy_init 必写，U-Boot 移植漏了）
-        System.write32(phy2, System.read32(phy2) | 0x2);
-        // USB2 PHY LS keep-alive：host 模式置 bit4（USB_LS_KEEPALIVE_ENABLE）
-        System.write32(phy2 + USB_LS_KEEPALIVE_OFF,
-                (System.read32(phy2 + USB_LS_KEEPALIVE_OFF) & ~0x14) | 0x10);
-        // USB3 PHY PLL SS_MODE（bit4），RMW 保留其他位
-        System.write32(phy3 + USB3_PHY_PLL_CTL_OFF,
-                System.read32(phy3 + USB3_PHY_PLL_CTL_OFF) | 0x10);
         StrBuilder sb = new StrBuilder();
-        sb.append("jh7110-usb: phy2+4=");
-        sb.append(StrUtils.toHex((long) System.read32(phy2 + USB_LS_KEEPALIVE_OFF)));
-        sb.append(" phy3+7c=");
-        sb.append(StrUtils.toHex((long) System.read32(phy3 + USB3_PHY_PLL_CTL_OFF)));
-        sb.append(" phy2 0..c=");
+        sb.append("jh7110-usb: phy2 0..c=");
         for (int off = 0; off <= 0xc; off += 4) {
             sb.append(StrUtils.toHex((long) System.read32(phy2 + (long) off)));
             sb.append(" ");
         }
-        sb.append("phy3 0..c=");
-        for (int off = 0; off <= 0xc; off += 4) {
-            sb.append(StrUtils.toHex((long) System.read32(phy3 + (long) off)));
-            sb.append(" ");
-        }
-        sb.append("phy3 28/80=");
-        sb.append(StrUtils.toHex((long) System.read32(phy3 + 0x28)));
-        sb.append(" ");
-        sb.append(StrUtils.toHex((long) System.read32(phy3 + 0x80)));
         str m = sb.build();
         StartupLogger.info(m);
         Memory.free(m);
         sb.dispose();
     }
 
-    /** Mars 板级 VBUS 使能：SYS GPIO25 mux 成 USB_DRIVE_VBUS 信号（对应 dts usb0_pins）。
-     * U-Boot 在 device probe 时自动应用 pinctrl，内核无 pinctrl 框架，这里手动做。 */
+    /** phy_set_mode(USB_HOST)：keepalive bit4 + split 置 1。
+     * 对齐 Linux cdns_drd_host_on——在 XHCI_READY 之后执行。 */
+    private static void phySetModeHost() {
+        long phy2 = MemoryLayout.physToVirt(PHY2_BASE);
+        long sys = MemoryLayout.physToVirt(SYS_SYSCON);
+        System.write32(phy2 + USB_LS_KEEPALIVE_OFF,
+                (System.read32(phy2 + USB_LS_KEEPALIVE_OFF) & ~0x14) | 0x10);
+        setBits(sys + 0x18, USB_PDRSTN_SPLIT);
+        StrBuilder sb = new StrBuilder();
+        sb.append("jh7110-usb: host phy2+4=");
+        sb.append(StrUtils.toHex((long) System.read32(phy2 + USB_LS_KEEPALIVE_OFF)));
+        sb.append(" sys18=");
+        sb.append(StrUtils.toHex((long) System.read32(sys + 0x18)));
+        str m = sb.build();
+        StartupLogger.info(m);
+        Memory.free(m);
+        sb.dispose();
+    }
+
+    /** Mars 板级 VBUS：对照组——完全不配置 GPIO25，验证 USB2.0 口的电是否依赖该引脚。 */
     private static void enableVbus() {
         long gpio = MemoryLayout.physToVirt(SYS_GPIO);
         int off = 4 * (VBUS_PIN / 4);
         int shift = 8 * (VBUS_PIN % 4);
-        long dout = gpio + 0x040 + off;   // DOUT：外设信号号
-        long doen = gpio + 0x000 + off;   // DOEN：输出使能（0=使能）
-        System.write32(dout, (System.read32(dout) & ~(0x7F << shift)) | (VBUS_DOUT_SIGNAL << shift));
-        System.write32(doen, System.read32(doen) & ~(0x3F << shift));
-        // mux 功能号 0（0x2a0 寄存器 bit15 起，pin25）
-        System.write32(gpio + 0x2a0, System.read32(gpio + 0x2a0) & ~(0x3 << 15));
-        // pad cfg：清 bias/smt/slew/ie（dts usb0_pins 的 pinconf），保留 drive-strength
-        System.write32(gpio + 0x120 + (long) VBUS_PIN * 4,
-                System.read32(gpio + 0x120 + (long) VBUS_PIN * 4) & ~0x6D);
         StrBuilder sb = new StrBuilder();
-        sb.append("jh7110-usb: vbus dout=");
-        sb.append(StrUtils.toHex((long) System.read32(dout)));
+        sb.append("jh7110-usb: vbus off(ctrl) dout=");
+        sb.append(StrUtils.toHex((long) System.read32(gpio + 0x040 + off)));
         sb.append(" doen=");
-        sb.append(StrUtils.toHex((long) System.read32(doen)));
-        sb.append(" gpi25=");
-        sb.append(StrUtils.toHex((long) ((System.read32(gpio + 0x080 + off) >>> shift) & 0x7F)));
+        sb.append(StrUtils.toHex((long) System.read32(gpio + 0x000 + off)));
+        sb.append(" in25=");
+        sb.append(StrUtils.toHex((long) ((System.read32(gpio + 0x118) >>> VBUS_PIN) & 1)));
         sb.append(" mux=");
         sb.append(StrUtils.toHex((long) System.read32(gpio + 0x2a0)));
         sb.append(" pad=");
         sb.append(StrUtils.toHex((long) System.read32(gpio + 0x120 + (long) VBUS_PIN * 4)));
         str m = sb.build();
         StartupLogger.info(m);
+        Memory.free(m);
+        sb.dispose();
+    }
+
+    /** 临时诊断：插拔键盘观察 phy2 全寄存器与端口 sc（找 line state/连接状态寄存器）。 */
+    static void diagUsb() {
+        if (!jh7110Ready) return;   // 非 JH7110（QEMU 等）无这些 MMIO，直接跳过
+        long phy2 = MemoryLayout.physToVirt(PHY2_BASE);
+        long gpio = MemoryLayout.physToVirt(SYS_GPIO);
+        long xhci = MemoryLayout.physToVirt(0x10110000L) + 0x80 + 0x400;
+        StrBuilder sb = new StrBuilder();
+        sb.append("usb-diag: in25=");
+        sb.append(StrUtils.toHex((long) ((System.read32(gpio + 0x118) >>> VBUS_PIN) & 1)));
+        for (int off = 0; off <= 0x20; off += 4) {
+            sb.append(" ");
+            sb.append(StrUtils.toHex((long) off));
+            sb.append("=");
+            sb.append(StrUtils.toHex((long) System.read32(phy2 + (long) off)));
+        }
+        sb.append(" p0=");
+        sb.append(StrUtils.toHex((long) System.read32(xhci)));
+        sb.append(" p1=");
+        sb.append(StrUtils.toHex((long) System.read32(xhci + 0x10)));
+        str m = sb.build();
+        BspKrMain.arch.getUart().println(m);
         Memory.free(m);
         sb.dispose();
     }

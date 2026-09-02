@@ -14,7 +14,8 @@ class XhciRing {
     static final int TRB_CYCLE      = 1 << 0;
     static final int TRB_CHAIN      = 1 << 4;
     static final int TRB_IOC        = 1 << 5;
-    static final int TRB_IDT        = 1 << 6;
+    static final int TRB_ISP        = 1 << 2;   // 短包中断（Normal/Data TRB，对齐 Linux BIT(2)）
+    static final int TRB_IDT        = 1 << 6;   // Setup TRB 立即数据
     static final int TRB_DIR_IN     = 1 << 16;
     static final int TRB_TYPE_SHIFT = 10;
 
@@ -41,6 +42,17 @@ class XhciRing {
 
     boolean isOk() -> ok
     long getPhys() -> phys
+    long getVa() -> va
+    int getEnqIndex() -> enqIndex
+
+    /** 倒带：清零整个环并把入队指针退回环头（配合 Set TR Dequeue 把 xHC
+     *  的 dequeue 指回环头；真机 cdns3 只认环头的 TD，环推进后不再执行）。
+     *  清零是必须的——否则旧 TD 残留在环中后部（cycle=1），xHC 会越界执行。 */
+    void rewind() {
+        for (int i = 0; i < size * 4; i++) System.write32(va + (long) i * 4, 0);
+        enqIndex = 0;
+        pending = 0;
+    }
 
     void reset() {
         for (int i = 0; i < size * 4; i++) System.write32(va + (long) i * 4, 0);

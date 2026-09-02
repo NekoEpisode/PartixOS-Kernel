@@ -48,7 +48,7 @@ class Cdns3HcTemplate implements IDriver {
         Memory.free(m);
         sb.dispose();
         Jh7110UsbPlatform.initUsb(d.getResource(0).start);
-        return new XhciDriver(d.getResource(1).start, 0x30);
+        return new XhciDriver(d.getResource(1).start, 0x30, true);
     }
 
     private static void uart(str msg) {

@@ -181,7 +181,9 @@ class RISCVInterruptController implements IInterruptController {
                 Scheduler.sysExit(-11);
                 return Scheduler.onReschedule();
             }
-            if (stval < 4096) {
+            // 无符号比较：真 null deref 是 stval ∈ [0,4096)；0xFFFFFF80... 这类高位
+            // 负值（被符号扩展污染）不应误判为 null deref
+            if ((stval & 0xFFFFFFFFFFFFF000L) == 0) {
                 KernelNullPointerFault.trigger(stval, epc, frame);
                 return 0;
             }

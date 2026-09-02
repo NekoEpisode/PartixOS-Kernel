@@ -5,9 +5,13 @@ import kr.partix.kernel.sched.Scheduler;
 
 /** USB 插拔轮询线程。 */
 class UsbPollRunnable extends KernelRunnable {
+    private int tick;
+
     void run() {
         while (true) {
             UsbCore.pollOnce();
+            tick += 1;
+            if (tick % 10 == 0) Jh7110UsbPlatform.diagUsb();
             Scheduler.sleep(150);
         }
     }
