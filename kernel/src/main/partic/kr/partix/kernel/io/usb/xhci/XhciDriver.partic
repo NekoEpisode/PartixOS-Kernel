@@ -4,6 +4,10 @@ import kr.partix.kernel.device.IDevice;
 import kr.partix.kernel.io.drivers.DriverType;
 import kr.partix.kernel.io.drivers.IDriver;
 import kr.partix.kernel.io.usb.IHc;
+import kr.partix.kernel.log.StartupLogger;
+import kr.partix.kernel.main.BspKrMain;
+import kr.partix.kernel.memory.MemoryLayout;
+import kr.partix.kernel.paging.PageFlags;
 import kr.partix.kernel.sys.System;
 import kr.partix.kernel.timer.Timer;
 import lang.partic.stdlib.additional.utils.StrBuilder;
@@ -675,9 +679,9 @@ class XhciDriver implements IDriver, IHc {
     /** 等指定槽的传输完成事件。返回后 lastTransferCcode 有效。 */
     private boolean waitTransferEvent(int slot) {
         probeDoorbell(slot);
-        // 诊断：真机 cdns3 的失败事件（cc=4 等）在门铃后 ~10s 才投递
-        // （xHC 重试极慢），1s 超时永远等不到。诊断期放宽到 12s。
-        long deadline = Timer.getTicks() + Timer.TICK_HZ * 12;
+        // 横扫实验已证明：失败的传输在 12s 内也不会产生任何事件——
+        // 等待 3s 足够，缩短诊断轮次时长。
+        long deadline = Timer.getTicks() + Timer.TICK_HZ * 3;
         boolean timedOut = waitTransferEventPoll(slot, deadline);
         if (timedOut) {
             // 诊断：doorbell 可能丢失/过早（真机 cdns3 观察到敲了 EP0 门铃

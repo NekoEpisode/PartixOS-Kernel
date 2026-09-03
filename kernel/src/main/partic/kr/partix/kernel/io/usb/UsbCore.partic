@@ -206,7 +206,21 @@ class UsbCore {
             as.dispose();
 
             buf = Memory.malloc(64);
+            // 阶梯实验（真机 cdns3 IN 数据阶段疑似丢第一个 8 字节包）：
+            // ① 单包 8 字节读（干净？槽是否存活？）
+            // ② 同槽第二次 8 字节读（若通 → 干净的首传不会弄死设备）
+            // ③ 全量 18 字节读（多包——验证是否依旧错位/短包）
+            uart("usb: ladder[1] GET_DESC 8B...");
+            boolean ok8a = hc.controlTransfer(addr, 0x80, 6, 0x0100, 0, 8, buf);
+            uart(ok8a ? "usb: ladder[1] 8B OK" : "usb: ladder[1] 8B FAILED");
+            if (ok8a) {
+                uart("usb: ladder[2] repeat 8B...");
+                boolean ok8b = hc.controlTransfer(addr, 0x80, 6, 0x0100, 0, 8, buf);
+                uart(ok8b ? "usb: ladder[2] 8B OK (slot alive!)" : "usb: ladder[2] 8B FAILED (slot dead)");
+            }
+            uart("usb: ladder[3] GET_DESC 18B...");
             descOk = hc.controlTransfer(addr, 0x80, 6, 0x0100, 0, 18, buf);
+            uart(descOk ? "usb: ladder[3] 18B OK" : "usb: ladder[3] 18B FAILED");
             if (descOk) break;
             uart("usb: desc read failed, retrying...");
             Memory.free(buf);
@@ -221,15 +235,6 @@ class UsbCore {
             return;
         }
         uart("usb: descriptor read ok");
-        // 诊断：鼠标（LS）第一次传输成功、第二次必挂。此处做"同请求二次
-        // 传输"实验：环推进到 idx3 后重发完全相同的请求——
-        // - 成功 → 环复用没问题，问题在请求内容/后续流程；
-        // - 失败 → 环位置/EP 状态问题（xHC 不会从新位置执行 TD）。
-        long b2 = Memory.malloc(64);
-        uart("usb: EXPERIMENT repeat same GET_DESCRIPTOR...");
-        boolean ok2 = hc.controlTransfer(addr, 0x80, 6, 0x0100, 0, 18, b2);
-        uart(ok2 ? "usb: repeat-transfer OK" : "usb: repeat-transfer FAILED");
-        Memory.free(b2);
         int vid = ((int) System.read8(buf + 8) & 0xFF)
                 | (((int) System.read8(buf + 9) & 0xFF) << 8);
         int pid = ((int) System.read8(buf + 10) & 0xFF)
